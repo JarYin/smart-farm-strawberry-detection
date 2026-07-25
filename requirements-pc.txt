@@ -1,0 +1,36 @@
+# ไลบรารีสำหรับเครื่องคอมพิวเตอร์ (ใช้พัฒนา เทรน และแปลงโมเดล)
+#
+# ติดตั้งด้วย:
+#     python -m venv .venv
+#     .venv\Scripts\activate          (Windows)
+#     pip install -r requirements-pc.txt
+#
+# หมายเหตุสำคัญเรื่องเวอร์ชัน Python:
+#   แนะนำ Python 3.10 - 3.12 สำหรับเครื่องพัฒนา
+#   Python 3.13 ใช้เทรนได้ แต่ขั้นตอนแปลงเป็น TFLite (onnx2tf, tensorflow)
+#   ยังมีปัญหาเรื่องความเข้ากันได้ในบางเวอร์ชัน
+#   ถ้าติดปัญหา ให้แปลงโมเดลบน Google Colab แทนแล้วดาวน์โหลดไฟล์ .tflite มาใช้
+
+# --- แกนหลัก ---
+ultralytics>=8.3.0        # YOLOv8 (เทรน + ประเมินผล + แปลงโมเดล)
+opencv-python>=4.8.0      # จัดการภาพและวิดีโอ
+numpy>=1.24.0
+PyYAML>=6.0               # อ่านไฟล์ config.yaml
+
+# --- ทดสอบ ---
+pytest>=7.4.0
+
+# --- เรียกใช้โมเดลบน Roboflow ผ่าน API (ทางเลือก ไม่บังคับ) ---
+# ใช้ทดสอบเร็วๆ ก่อนมีโมเดลของตัวเอง (ดู tools/roboflow_infer.py)
+# "ไม่ใช่" สิ่งที่ควรใช้รันจริงบน Raspberry Pi — ดูเหตุผลใน src/detector.py (RoboflowDetector)
+inference-sdk>=0.9.0
+
+# --- สำหรับแปลงโมเดลเป็น TFLite (ติดตั้งเมื่อจะแปลงเท่านั้น) ---
+# ปลดคอมเมนต์บรรทัดด้านล่างก่อนรัน tools/export_tflite.py
+# tensorflow>=2.16.0
+# onnx>=1.16.0
+# onnx2tf>=1.22.0
+# onnxslim>=0.1.31
+# onnx_graphsurgeon>=0.5.0
+# sng4onnx>=1.0.1
+# tflite_support

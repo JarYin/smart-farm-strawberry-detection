@@ -1,0 +1,42 @@
+# สภาพแวดล้อม Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# คีย์ลับ (Roboflow API key ฯลฯ) — ห้ามหลุดเข้า git เด็ดขาด
+.env
+.env.*
+!.env.example
+
+# ไฟล์โมเดล (ใหญ่เกินกว่าจะเก็บใน git — เก็บใน Google Drive แทน)
+models/*.pt
+models/*.tflite
+models/*.onnx
+models/*_saved_model/
+*.pt
+*.tflite
+*.onnx
+
+# ชุดข้อมูล (ใหญ่มาก — ดาวน์โหลดจาก Roboflow ใหม่ได้)
+datasets/
+!datasets/README.md
+
+# ผลลัพธ์จากการเทรนและการทดลอง
+runs/
+logs/
+*.mp4
+*.avi
+
+# ไฟล์ระบบปฏิบัติการ
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ไฟล์ของโปรแกรมแก้โค้ด
+.vscode/
+.idea/
+*.swp
