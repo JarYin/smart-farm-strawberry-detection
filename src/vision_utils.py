@@ -213,3 +213,28 @@ def point_in_box(x: float, y: float, box) -> bool:
     """เช็คว่าจุด (x, y) อยู่ในกล่องหรือไม่"""
     x1, y1, x2, y2 = box
     return x1 <= x <= x2 and y1 <= y <= y2
+
+
+def plausible_box_geometry(
+    box_width: float,
+    box_height: float,
+    frame_shape: Tuple[int, int],
+    min_aspect: float,
+    max_aspect: float,
+    min_area_frac: float,
+    max_area_frac: float,
+) -> bool:
+    """เช็คว่ากล่องมีสัดส่วน/ขนาดสมเหตุสมผลกับสิ่งที่โมเดลควรจะเจอไหม
+
+    ตัวกรองเสริม (ไม่ใช่ตัวแก้หลัก) สำหรับลด false positive ที่รูปทรงกล่องผิดปกติชัดเจน
+    เช่น กล่องบางยาวผิดปกติหรือใหญ่/เล็กเกินสัดส่วนภาพ — ขอบเขต min/max ควรมาจากการวัด
+    กล่องจริงของ true positive เท่านั้น (ดู config.yaml -> geometry_filter) ห้ามเดาเอง
+    เพราะ true positive กับ false positive มีช่วงค่าทับซ้อนกันมาก ตัวกรองนี้ตัดได้แค่
+    ส่วนที่ผิดปกติชัดๆ ไม่ใช่ทางแก้ปัญหา false positive ทั้งหมด
+    """
+    height, width = frame_shape
+    if box_height <= 0 or width <= 0 or height <= 0:
+        return False
+    aspect = box_width / box_height
+    area_frac = (box_width * box_height) / (width * height)
+    return min_aspect <= aspect <= max_aspect and min_area_frac <= area_frac <= max_area_frac

@@ -1,0 +1,18 @@
+[Unit]
+Description=Smart Farm Autonomous Robot
+After=multi-user.target
+
+[Service]
+Type=simple
+# แก้ User / WorkingDirectory / ExecStart ให้ตรงกับ username และ path จริงของเครื่องคุณ
+User=pi
+WorkingDirectory=/home/pi/CODE
+# PYTHONUNBUFFERED=1 จำเป็นมาก — ถ้าไม่ตั้ง journalctl -f จะไม่เห็น log สดเลย เพราะ
+# Python buffer stdout เต็มก้อนเมื่อไม่ได้ต่อกับ terminal จริง (ทดสอบพบจริง 2026-08-08)
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/smartfarm-env/bin/python -m src.main --headless
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

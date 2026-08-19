@@ -1,3 +1,2 @@
 ﻿class,precision,recall,f1,mAP50,mAP50-95
-strawberry-ripe,0.7648,0.9259,0.8377,0.8479,0.7719
-strawberry-unripe,0.8505,0.7223,0.7812,0.824,0.6826
+Strawberry-Plant,0.9762,0.9758,0.976,0.9885,0.8931

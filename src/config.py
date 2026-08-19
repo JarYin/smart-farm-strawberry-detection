@@ -212,6 +212,35 @@ class RoiCfg:
 
 
 @dataclass
+class GeomFilterCfg:
+    """ตัวกรองรูปทรงกล่องเสริม — ตัด detection ที่ aspect ratio/ขนาดผิดปกติชัดๆ ทิ้ง
+
+    เป็นเลเยอร์เสริมลด false positive เท่านั้น ไม่ใช่ทางแก้ที่ต้นตอ (ดูคอมเมนต์ใน
+    config.yaml -> geometry_filter สำหรับที่มาของตัวเลขและข้อจำกัด)
+
+    ค่า default ของคลาสนี้ตั้ง enabled=False โดยตั้งใจ (ปิดไว้ก่อน) เพราะขอบเขต
+    min/max_area_frac คำนวณจากสัดส่วนกล่องเทียบกับ "เฟรมกล้องจริง" (640x480+) —
+    โค้ดที่สร้าง SprayController ตรงๆ โดยไม่ผ่าน config.yaml (เช่น เทสต์ที่ใช้กล่อง
+    สังเคราะห์ขนาดเล็กทดสอบ logic ตำแหน่ง/ROI) จะไม่ได้ตั้งใจให้ผ่านตัวกรองนี้
+    ระบบจริงเปิดใช้งานผ่าน config.yaml -> geometry_filter.enabled: true แทน
+    """
+
+    enabled: bool = False
+    min_aspect: float = 0.26
+    max_aspect: float = 2.15
+    min_area_frac: float = 0.075
+    max_area_frac: float = 0.511
+
+    def validate(self) -> None:
+        if self.min_aspect <= 0 or self.min_aspect >= self.max_aspect:
+            raise ConfigError("geometry_filter.min_aspect ต้องมากกว่า 0 และน้อยกว่า max_aspect")
+        if not 0.0 < self.min_area_frac < self.max_area_frac <= 1.0:
+            raise ConfigError(
+                "geometry_filter.min_area_frac/max_area_frac ต้องอยู่ระหว่าง 0-1 และ min < max"
+            )
+
+
+@dataclass
 class SprayCfg:
     confirm_frames: int = 3
     release_frames: int = 5
@@ -295,6 +324,7 @@ class Config:
     roboflow: RoboflowCfg = field(default_factory=RoboflowCfg)
     classes: ClassCfg = field(default_factory=ClassCfg)
     roi: RoiCfg = field(default_factory=RoiCfg)
+    geometry_filter: GeomFilterCfg = field(default_factory=GeomFilterCfg)
     spray: SprayCfg = field(default_factory=SprayCfg)
     relay: RelayCfg = field(default_factory=RelayCfg)
     runtime: RuntimeCfg = field(default_factory=RuntimeCfg)
@@ -417,6 +447,7 @@ def load_config(path: str | Path | None = None) -> Config:
         roboflow=_build_section(RoboflowCfg, raw.get("roboflow"), "roboflow"),
         classes=_build_section(ClassCfg, raw.get("classes"), "classes"),
         roi=_build_section(RoiCfg, raw.get("roi"), "roi"),
+        geometry_filter=_build_section(GeomFilterCfg, raw.get("geometry_filter"), "geometry_filter"),
         spray=_build_section(SprayCfg, raw.get("spray"), "spray"),
         relay=_build_section(RelayCfg, raw.get("relay"), "relay"),
         runtime=_build_section(RuntimeCfg, raw.get("runtime"), "runtime"),

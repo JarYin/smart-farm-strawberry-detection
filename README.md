@@ -366,31 +366,21 @@ python -m src.main --headless                    # 4. รันระบบเ�
 
 ### 7.5 ให้ระบบทำงานอัตโนมัติเมื่อเปิดเครื่อง
 
-สร้างไฟล์ `/etc/systemd/system/smartfarm.service`:
-
-```ini
-[Unit]
-Description=Smart Farm Autonomous Robot
-After=multi-user.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/CODE
-ExecStart=/home/pi/smartfarm-env/bin/python -m src.main --headless
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
+มีไฟล์ template ให้แล้วที่ `scripts/smartfarm.service` — แก้ `User`/`WorkingDirectory`/`ExecStart`
+ให้ตรงกับ username และ path จริงของเครื่องคุณก่อน (ค่าเริ่มต้นในไฟล์สมมติว่า username คือ `pi`)
+แล้วคัดลอกไปที่ `/etc/systemd/system/`:
 
 ```bash
+sudo cp scripts/smartfarm.service /etc/systemd/system/smartfarm.service
 sudo systemctl daemon-reload
 sudo systemctl enable smartfarm.service
 sudo systemctl start smartfarm.service
 sudo journalctl -u smartfarm.service -f      # ดู log แบบเรียลไทม์
 ```
+
+**สำคัญ**: ไฟล์ template มี `Environment=PYTHONUNBUFFERED=1` ไว้แล้ว — ถ้าไม่มีบรรทัดนี้
+`journalctl -f` จะไม่เห็น log สดเลย เพราะ Python จะ buffer ข้อความไว้ทั้งก้อนแทนที่จะพิมพ์
+ทันทีเมื่อไม่ได้รันอยู่บน terminal จริง (ยืนยันจากการทดสอบ deploy จริง)
 
 โปรแกรมจับสัญญาณ `SIGTERM` ไว้แล้ว เมื่อสั่ง `systemctl stop` ปั๊มจะถูกปิดอย่างเรียบร้อยเสมอ
 

@@ -157,6 +157,7 @@ def run(cfg, args) -> int:
         roi_cfg=cfg.roi,
         class_cfg=cfg.classes,
         base_conf=effective_conf(cfg),
+        geom_cfg=cfg.geometry_filter,
     )
     logger = EventLogger(
         cfg.resolve_path(cfg.runtime.log_csv) if cfg.runtime.log_csv else "",

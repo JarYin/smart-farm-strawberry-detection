@@ -17,9 +17,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
-from .config import ClassCfg, RoiCfg, SprayCfg
+from .config import ClassCfg, GeomFilterCfg, RoiCfg, SprayCfg
 from .detection import Detection
-from .vision_utils import boxes_overlap, expand_box, point_in_box
+from .vision_utils import boxes_overlap, expand_box, plausible_box_geometry, point_in_box
 
 # สถานะของเครื่องสถานะ
 STATE_IDLE = "IDLE"
@@ -82,12 +82,14 @@ class SprayController:
         class_cfg: ClassCfg,
         base_conf: float = 0.45,
         clock: Callable[[], float] = time.monotonic,
+        geom_cfg: GeomFilterCfg | None = None,
     ) -> None:
         self.spray = spray_cfg
         self.roi = roi_cfg
         self.classes = class_cfg
         self.base_conf = float(base_conf)
         self.clock = clock
+        self.geom = geom_cfg or GeomFilterCfg()
 
         self.state = STATE_IDLE
         self.hit_streak = 0
@@ -119,6 +121,22 @@ class SprayController:
             required_conf = self.classes.conf_for(det.class_name, self.base_conf)
             if det.confidence < required_conf:
                 analysis.rejected.append((det, f"ความเชื่อมั่น {det.confidence:.2f} < {required_conf:.2f}"))
+                continue
+
+            if self.geom.enabled and not plausible_box_geometry(
+                det.x2 - det.x1,
+                det.y2 - det.y1,
+                frame_shape,
+                self.geom.min_aspect,
+                self.geom.max_aspect,
+                self.geom.min_area_frac,
+                self.geom.max_area_frac,
+            ):
+                aspect = (det.x2 - det.x1) / max(det.y2 - det.y1, 1e-9)
+                area_frac = ((det.x2 - det.x1) * (det.y2 - det.y1)) / max(width * height, 1)
+                analysis.rejected.append(
+                    (det, f"รูปทรงกล่องผิดปกติ (aspect={aspect:.2f}, area_frac={area_frac:.3f})")
+                )
                 continue
 
             role = self.classes.role_of(det.class_name)

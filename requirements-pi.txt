@@ -16,10 +16,14 @@ PyYAML>=6.0
 opencv-python-headless>=4.8.0   # ไม่มีส่วนแสดงผลหน้าต่าง เบากว่าและติดตั้งง่ายกว่าบน Pi
 
 # ตัวรันโมเดล TFLite — เลือกอย่างใดอย่างหนึ่ง
-tflite-runtime>=2.14.0
-# ถ้าติดตั้ง tflite-runtime ไม่สำเร็จ (แล้วแต่รุ่นของ Raspberry Pi OS)
-# ให้ลองแพ็กเกจนี้แทน:
-#   pip install ai-edge-litert
+#
+# tflite-runtime เดิมเลิกพัฒนาแล้ว ไม่มี wheel สำหรับ Python รุ่นใหม่ (เช่น 3.13 บน
+# Raspberry Pi OS Trixie ขึ้นไป) ทดสอบแล้ว (2026-08-08) ว่าติดตั้งไม่ได้บน Python 3.13
+# จึงใช้ ai-edge-litert (LiteRT ตัวที่ Google ดูแลต่อ) เป็นค่าเริ่มต้นแทน — src/detector.py
+# รองรับทั้งสองแพ็กเกจอยู่แล้ว (ลอง tflite_runtime ก่อน แล้วค่อย ai_edge_litert)
+ai-edge-litert>=2.1.0
+# ถ้าใช้ Raspberry Pi OS รุ่นเก่ากว่า (Python <= 3.11) ลองตัวนี้แทนได้ (เบากว่าเล็กน้อย):
+#   pip install tflite-runtime>=2.14.0
 # หรือใช้ TensorFlow เต็มตัว (หนักกว่ามาก ใช้เป็นทางเลือกสุดท้าย):
 #   pip install tensorflow
 

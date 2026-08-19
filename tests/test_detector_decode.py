@@ -82,6 +82,7 @@ def build_detector(output: np.ndarray, **kwargs) -> TFLiteDetector:
     detector.output_dtype = detector.output_detail["dtype"]
     detector.output_quant = detector.output_detail["quantization"]
     detector.is_quantized_input = detector.input_dtype in (np.int8, np.uint8)
+    detector.input_layout = "nhwc"
     return detector
 
 
@@ -212,3 +213,34 @@ def test_ถอดผลลัพธ์แบบ_quantized_int8():
     assert detections[0].class_name == "weed"
     assert detections[0].confidence == pytest.approx(0.92, abs=0.01)
     assert detections[0].box == pytest.approx((120.0, 120.0, 200.0, 200.0), abs=2.0)
+
+
+# ---------------------------------------------------------------------------
+# ทดสอบ _preprocess() รองรับทั้ง layout NHWC และ NCHW ของ input tensor
+#
+# พบบั๊กจริงตอน deploy บน Raspberry Pi 2026-08-08: best_float32.tflite ที่ export
+# มา มี input shape (1, 3, 320, 320) = NCHW แต่ _preprocess() เดิมสร้าง tensor
+# แบบ NHWC เสมอ ทำให้ set_tensor() พังด้วย "Dimension mismatch" ทุกเฟรม
+# ---------------------------------------------------------------------------
+
+
+def test_เตรียมภาพแบบ_nhwc_ได้รูปทรงถูกต้อง():
+    raw = make_raw_output([(160, 160, 80, 80, [0.05, 0.92])])
+    detector = build_detector(raw)
+    detector.input_layout = "nhwc"
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    tensor, ratio, pad = detector._preprocess(frame)
+
+    assert tensor.shape == (1, IMGSZ, IMGSZ, 3)
+
+
+def test_เตรียมภาพแบบ_nchw_สลับแกนให้ถูกต้อง():
+    raw = make_raw_output([(160, 160, 80, 80, [0.05, 0.92])])
+    detector = build_detector(raw)
+    detector.input_layout = "nchw"
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    tensor, ratio, pad = detector._preprocess(frame)
+
+    assert tensor.shape == (1, 3, IMGSZ, IMGSZ)

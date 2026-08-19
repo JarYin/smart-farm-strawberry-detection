@@ -196,12 +196,19 @@ class TFLiteDetector(BaseDetector):
         self.input_detail = self.interpreter.get_input_details()[0]
         self.output_detail = self.interpreter.get_output_details()[0]
 
-        # รูปร่างอินพุตของ YOLOv8 TFLite คือ NHWC = (1, H, W, 3)
+        # รูปร่างอินพุตของ YOLOv8 TFLite ปกติคือ NHWC = (1, H, W, 3) แต่บาง export
+        # (พบจริงกับโมเดลที่ export จาก Colab เดือน 2026-08) ให้เป็น NCHW = (1, 3, H, W)
+        # แทน ต้องตรวจให้ถูกทั้งสองแบบ ไม่งั้น set_tensor จะพังด้วย dimension mismatch
         input_shape = self.input_detail["shape"]
         if len(input_shape) == 4 and input_shape[3] == 3:
+            self.input_layout = "nhwc"
             self.imgsz = (int(input_shape[1]), int(input_shape[2]))
+        elif len(input_shape) == 4 and input_shape[1] == 3:
+            self.input_layout = "nchw"
+            self.imgsz = (int(input_shape[2]), int(input_shape[3]))
         else:
             print(f"[detector] เตือน: รูปร่างอินพุตผิดจากที่คาด {input_shape} -> ใช้ค่าจาก config แทน")
+            self.input_layout = "nhwc"
             self.imgsz = (int(imgsz), int(imgsz))
 
         if self.imgsz != (int(imgsz), int(imgsz)):
@@ -225,9 +232,19 @@ class TFLiteDetector(BaseDetector):
 
     @staticmethod
     def _load_interpreter_class():
-        """หา Interpreter จาก tflite_runtime ก่อน ถ้าไม่มีค่อยใช้ของ TensorFlow เต็มตัว"""
+        """หา Interpreter จาก tflite_runtime ก่อน ถ้าไม่มีค่อยลอง ai-edge-litert แล้วค่อย TensorFlow เต็มตัว
+
+        tflite_runtime เลิกพัฒนาแล้วและไม่มี wheel สำหรับ Python รุ่นใหม่ (เช่น 3.13 บน
+        Raspberry Pi OS Trixie) — Google เปลี่ยนไปดูแลต่อในชื่อ ai-edge-litert (LiteRT) แทน
+        """
         try:
             from tflite_runtime.interpreter import Interpreter  # type: ignore
+
+            return Interpreter
+        except ImportError:
+            pass
+        try:
+            from ai_edge_litert.interpreter import Interpreter  # type: ignore
 
             return Interpreter
         except ImportError:
@@ -239,8 +256,9 @@ class TFLiteDetector(BaseDetector):
         except ImportError as exc:
             raise DetectorError(
                 "ไม่พบตัวรัน TFLite — ติดตั้งอย่างใดอย่างหนึ่ง:\n"
-                "  บน Raspberry Pi :  pip install tflite-runtime\n"
-                "  บน PC (Windows) :  pip install tensorflow"
+                "  บน Raspberry Pi (Python รุ่นใหม่) :  pip install ai-edge-litert\n"
+                "  บน Raspberry Pi (Python รุ่นเก่า) :  pip install tflite-runtime\n"
+                "  บน PC (Windows)                  :  pip install tensorflow"
             ) from exc
 
     # -- ขั้นตอนที่ 1: เตรียมภาพ -------------------------------------------------
@@ -265,6 +283,9 @@ class TFLiteDetector(BaseDetector):
                 tensor = rgb.astype(self.input_dtype)
         else:
             tensor = (rgb.astype(np.float32) / 255.0).astype(self.input_dtype)
+
+        if self.input_layout == "nchw":
+            tensor = tensor.transpose(2, 0, 1)  # HWC -> CHW
 
         return np.expand_dims(tensor, axis=0), ratio, pad
 

@@ -34,12 +34,14 @@ sudo apt update
 echo ""
 echo "[2/5] ติดตั้งแพ็กเกจของระบบ (กล้อง + GPIO + เครื่องมือพื้นฐาน)"
 # picamera2 และ gpiozero ต้องติดตั้งผ่าน apt เท่านั้น ติดตั้งผ่าน pip จะใช้ไม่ได้
+# libopenblas-dev (ไม่ใช่ libatlas-base-dev) เพราะ Debian Bookworm ที่ Raspberry Pi OS
+# รุ่นใหม่ใช้อยู่ ถอด libatlas-base-dev ออกจาก repo แล้ว เปลี่ยนมาใช้ OpenBLAS แทน
 sudo apt install -y \
     python3-pip \
     python3-venv \
     python3-picamera2 \
     python3-gpiozero \
-    libatlas-base-dev \
+    libopenblas-dev \
     libopenjp2-7
 
 echo ""
