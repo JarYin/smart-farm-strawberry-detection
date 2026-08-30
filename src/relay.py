@@ -6,9 +6,12 @@
 ต่างแค่คำที่พิมพ์ออกคอนโซลของรีเลย์จำลอง
 
 ข้อควรระวังเรื่องความปลอดภัย 3 ข้อ:
-  1. โมดูลรีเลย์ราคาถูกส่วนใหญ่เป็น Active LOW (ส่งสัญญาณ 0 = รีเลย์ทำงาน)
-     ถ้าตั้ง relay.active_high ผิด ปั๊มจะทำงานทันทีที่เปิดโปรแกรม
-     ให้ทดสอบด้วย  python tools/relay_test.py  ก่อนต่อปั๊มจริงเสมอ
+  1. ตั้ง relay.active_high ให้ตรงกับวงจร ไม่งั้นอุปกรณ์จะทำงานทันทีที่เปิดโปรแกรม
+       โมดูลรีเลย์ราคาถูกส่วนใหญ่เป็น Active LOW (ส่งสัญญาณ 0 = รีเลย์ทำงาน) -> false
+       เลเซอร์ผ่านทรานซิสเตอร์ NPN แบบ low-side (ส่งสัญญาณ 1 = ติด)        -> true
+     ทดสอบก่อนต่ออุปกรณ์จริงเสมอ:
+       ปั๊ม/รีเลย์ :  python tools/relay_test.py
+       เลเซอร์     :  python tools/laser_test.py
   2. ทุกทางออกของโปรแกรม (จบปกติ, Ctrl+C, error) ต้องปิดรีเลย์ให้ได้
      จึงบังคับใช้ผ่าน try/finally และ context manager
   3. ถ้าไม่ได้อยู่บน Raspberry Pi จะใช้ MockRelay ที่แค่พิมพ์ข้อความ
@@ -129,6 +132,74 @@ class MockRelay(BaseRelay):
             print(f"[relay] {state}")
 
 
+class DirectGpioOutput(BaseRelay):
+    """ขับขา GPIO ตรงๆ ไม่มีรีเลย์คั่น — สำหรับเลเซอร์ผ่านทรานซิสเตอร์ (backend: gpio)
+
+    ต่างจาก GpiozeroRelay ตรง "สิ่งที่อยู่ปลายสาย" ไม่ใช่ตรงโค้ด:
+
+      รีเลย์  : Pi -> ขา IN ของโมดูลรีเลย์ -> หน้าสัมผัสกล -> ปั๊ม (แยกไฟกันคนละวงจร)
+      ตรงนี้  : Pi -> ตัวต้านทาน -> ขา B ของทรานซิสเตอร์ -> ทรานซิสเตอร์ต่อ/ตัดวงจรเลเซอร์
+
+    ทำไมต้องมีทรานซิสเตอร์ ต่อเลเซอร์เข้าขา GPIO ตรงๆ ไม่ได้:
+      ขา GPIO ของ Raspberry Pi จ่ายได้ปลอดภัยแค่ ~16 mA ต่อขา (รวมทุกขาไม่เกิน 50 mA)
+      แต่โมดูลเลเซอร์ KY-008/HW-483 กินราว 30-40 mA — เกินพิกัด เสี่ยงทำให้ชิปพัง
+      และแรงดัน GPIO มีแค่ 3.3V ขณะที่โมดูลออกแบบมาสำหรับ 5V (ต่อตรงจะหรี่หรือไม่ติด)
+      ทรานซิสเตอร์แก้ทั้งสองข้อ: Pi จ่ายกระแสเข้าขา B แค่ ~3 mA ส่วนเลเซอร์ดูดไฟ 5V
+      จากขาจ่ายไฟของบอร์ดโดยตรง
+
+    ความปลอดภัย: ขาต้องอยู่สถานะ "ดับ" ตั้งแต่วินาทีแรกที่ตั้งเป็น OUTPUT เสมอ
+    ซึ่ง gpiozero จัดการให้ด้วย initial_value=False — แต่ถ้าตั้ง active_high ผิดด้าน
+    เลเซอร์จะติดค้างทันทีที่โปรแกรมเริ่ม จึงเตือนดังๆ ไว้ในคอนสตรัคเตอร์
+    """
+
+    def __init__(self, pin: int, active_high: bool, power: float = 1.0, actuator: str = "laser") -> None:
+        super().__init__(pin, active_high)
+        try:
+            from gpiozero import OutputDevice, PWMOutputDevice  # type: ignore
+        except ImportError as exc:
+            raise RelayError(
+                "ไม่พบไลบรารี gpiozero — ติดตั้งด้วย: sudo apt install python3-gpiozero"
+            ) from exc
+
+        self.power = float(power)
+        device_words = MOCK_WORDS.get(actuator, MOCK_WORDS["pump"])
+        self.device_th = device_words[0]
+
+        if self.power < 1.0:
+            # PWM ที่ 1 kHz เร็วเกินกว่าตาจะเห็นการกะพริบ ได้ผลเป็นความสว่างที่ลดลง
+            self.device = PWMOutputDevice(
+                self.pin, active_high=self.active_high, initial_value=0.0, frequency=1000
+            )
+        else:
+            self.device = OutputDevice(self.pin, active_high=self.active_high, initial_value=False)
+
+        print(
+            f"[relay] ขับขา GPIO ตรง (ไม่มีรีเลย์) | ขา GPIO{self.pin} | "
+            f"{'Active HIGH' if self.active_high else 'Active LOW'} | "
+            f"อุปกรณ์ {self.device_th} | กำลัง {self.power * 100:.0f}%"
+        )
+        if not self.active_high:
+            print(
+                "[relay] ⚠️  เตือน: ขับ GPIO ตรงแต่ตั้ง active_high: false\n"
+                f"        ขาจะถูกดึงเป็น HIGH ตอนพัก -> ถ้าใช้ทรานซิสเตอร์ NPN แบบ low-side\n"
+                f"        {self.device_th}จะติดค้างตลอดเวลา ให้แก้ config.yaml เป็น active_high: true"
+            )
+
+    def _write(self, energized: bool) -> None:
+        if self.power < 1.0:
+            self.device.value = self.power if energized else 0.0
+        else:
+            self.device.on() if energized else self.device.off()
+
+    def _cleanup(self) -> None:
+        device = getattr(self, "device", None)
+        if device is not None:
+            try:
+                device.close()
+            except Exception:  # pragma: no cover
+                pass
+
+
 class GpiozeroRelay(BaseRelay):
     """ใช้ไลบรารี gpiozero (มาพร้อม Raspberry Pi OS อยู่แล้ว และรองรับ Pi 5)"""
 
@@ -212,6 +283,14 @@ def build_relay(cfg: RelayCfg, force_mock: bool = False) -> BaseRelay:
     """สร้างตัวควบคุมรีเลย์ตาม config (auto = ใช้ของจริงถ้าอยู่บน Pi)"""
     if force_mock or cfg.backend == "mock":
         return MockRelay(cfg.pin, cfg.active_high, actuator=cfg.actuator)
+
+    if cfg.backend == "gpio":
+        # ขับขาตรงๆ (เลเซอร์ผ่านทรานซิสเตอร์) — บนเครื่องที่ไม่ใช่ Pi ถอยไป mock เหมือน auto
+        # เพื่อให้พัฒนาและสาธิตบน PC ได้โดยไม่ต้องแก้ config
+        if not _looks_like_raspberry_pi():
+            print("[relay] ไม่ได้รันอยู่บน Raspberry Pi -> ใช้รีเลย์จำลองแทนโดยอัตโนมัติ")
+            return MockRelay(cfg.pin, cfg.active_high, actuator=cfg.actuator)
+        return DirectGpioOutput(cfg.pin, cfg.active_high, cfg.power, cfg.actuator)
 
     if cfg.backend == "gpiozero":
         return GpiozeroRelay(cfg.pin, cfg.active_high)

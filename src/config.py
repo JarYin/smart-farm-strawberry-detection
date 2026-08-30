@@ -405,8 +405,16 @@ class RelayCfg:
     # วิเคราะห์ผลเดิม เช่น tools/report_events.py อ่านไฟล์เก่ากับไฟล์ใหม่ด้วยสคริปต์เดียวกันได้)
     actuator: str = "pump"
 
+    # power: ความแรงของอุปกรณ์ 0.0-1.0 (ใช้ได้เฉพาะ backend gpio/gpiozero)
+    #   1.0        = เปิด-ปิดธรรมดา (ค่าเริ่มต้น ไม่เปลี่ยนพฤติกรรมเดิม)
+    #   น้อยกว่า 1  = ขับด้วย PWM ให้กำลังเฉลี่ยลดลง
+    # มีไว้สำหรับเลเซอร์เป็นหลัก: ลดกำลังแสงตอนสาธิตในห้องให้ตาปลอดภัยขึ้น โดยยังเห็นจุดแดงชัด
+    # ⚠️ ไม่ได้แปลว่า "ปลอดภัยแล้ว" — ลดกำลังเฉลี่ยเท่านั้น ยังห้ามมองลำแสงตรงๆ อยู่ดี
+    # ปั๊มน้ำผ่านรีเลย์ใช้ค่านี้ไม่ได้ (รีเลย์เป็นสวิตช์กลไก PWM จะทำให้หน้าสัมผัสพัง) -> ตั้ง 1.0
+    power: float = 1.0
+
     def validate(self) -> None:
-        allowed = {"auto", "gpiozero", "rpigpio", "mock"}
+        allowed = {"auto", "gpio", "gpiozero", "rpigpio", "mock"}
         if self.backend not in allowed:
             raise ConfigError(
                 f"relay.backend ต้องเป็นหนึ่งใน {sorted(allowed)} (ได้รับ '{self.backend}')"
@@ -416,6 +424,16 @@ class RelayCfg:
         if self.actuator not in ACTUATORS:
             raise ConfigError(
                 f"relay.actuator ต้องเป็นหนึ่งใน {sorted(ACTUATORS)} (ได้รับ '{self.actuator}')"
+            )
+        if not 0.0 < self.power <= 1.0:
+            raise ConfigError(
+                f"relay.power ต้องมากกว่า 0 และไม่เกิน 1.0 (ได้รับ {self.power})\n"
+                "  1.0 = เปิด-ปิดธรรมดา | น้อยกว่านั้น = ขับด้วย PWM ลดกำลัง"
+            )
+        if self.power < 1.0 and self.backend in {"rpigpio", "mock"}:
+            raise ConfigError(
+                f"relay.power = {self.power} ใช้กับ relay.backend '{self.backend}' ไม่ได้\n"
+                "  การลดกำลังด้วย PWM รองรับเฉพาะ backend 'gpio' หรือ 'gpiozero' เท่านั้น"
             )
 
 
