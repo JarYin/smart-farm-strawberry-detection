@@ -1,14 +1,18 @@
 """
-ทดสอบรีเลย์และปั๊ม — ต้องรันตัวนี้ให้ผ่านก่อนรันระบบเต็ม
+ทดสอบรีเลย์และอุปกรณ์ปลายทาง — ต้องรันตัวนี้ให้ผ่านก่อนรันระบบเต็ม
 
-สิ่งที่ต้องพิสูจน์ก่อนต่อปั๊มจริง:
+อุปกรณ์ปลายทางคือปั๊มพ่นยาหรือเลเซอร์ ตามที่ตั้งไว้ที่ relay.actuator ใน config.yaml
+ขั้นตอนการทดสอบเหมือนกันทั้งสองแบบ (สิ่งที่ทดสอบคือรีเลย์ ไม่ใช่ตัวอุปกรณ์)
+
+สิ่งที่ต้องพิสูจน์ก่อนต่ออุปกรณ์จริง:
   1. ตอนโปรแกรมยังไม่สั่งอะไร รีเลย์ต้องอยู่สถานะ "ปิด"
      ถ้าได้ยินเสียงคลิกและรีเลย์ติดทันทีที่รันโปรแกรม แปลว่าตั้ง active_high ผิด
   2. สั่ง on แล้วรีเลย์ต้องทำงาน สั่ง off แล้วต้องหยุด
   3. กด Ctrl+C กลางคัน รีเลย์ต้องปิดเองทุกครั้ง
 
-คำเตือน: ทดสอบครั้งแรกให้ถอดสายปั๊มออกก่อน ฟังแค่เสียงคลิกของรีเลย์
-เมื่อมั่นใจว่าลำดับถูกต้องแล้วค่อยต่อปั๊มและใส่น้ำเปล่าทดสอบ
+คำเตือน: ทดสอบครั้งแรกให้ถอดสายอุปกรณ์ออกก่อน ฟังแค่เสียงคลิกของรีเลย์
+เมื่อมั่นใจว่าลำดับถูกต้องแล้วค่อยต่อของจริง (ปั๊ม: ใส่น้ำเปล่าทดสอบ |
+เลเซอร์: หันลำแสงลงพื้นโต๊ะเสมอ ห้ามเข้าตาหรือสะท้อนพื้นผิวมันวาว)
 
 วิธีใช้:
     python tools/relay_test.py                  # ทดสอบเปิด-ปิด 3 รอบ
@@ -33,7 +37,7 @@ def countdown(seconds: int, message: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ทดสอบโมดูลรีเลย์ควบคุมปั๊มพ่นยา")
+    parser = argparse.ArgumentParser(description="ทดสอบโมดูลรีเลย์ควบคุมปั๊ม/เลเซอร์")
     parser.add_argument("--config", default=None)
     parser.add_argument("--pin", type=int, default=None, help="ขา GPIO (แทนค่าใน config)")
     parser.add_argument("--cycles", type=int, default=3, help="จำนวนรอบเปิด-ปิด")
@@ -48,14 +52,17 @@ def main() -> int:
         cfg.relay.pin = args.pin
         cfg.validate()
 
+    device = "เลเซอร์" if cfg.relay.actuator == "laser" else "ปั๊มพ่นยา"
+
     print("=" * 72)
-    print(" ทดสอบรีเลย์ควบคุมปั๊มพ่นยา")
+    print(f" ทดสอบรีเลย์ควบคุม{device}")
     print("=" * 72)
     print(f" ขา GPIO      : {cfg.relay.pin}  (BCM numbering)")
     print(f" ตรรกะสัญญาณ  : {'Active HIGH' if cfg.relay.active_high else 'Active LOW'}")
     print(f" backend      : {cfg.relay.backend}")
+    print(f" อุปกรณ์      : {device}  (relay.actuator = {cfg.relay.actuator})")
     print("-" * 72)
-    print(" คำเตือน: ครั้งแรกให้ถอดสายปั๊มออกก่อน ฟังแค่เสียงคลิกของรีเลย์")
+    print(f" คำเตือน: ครั้งแรกให้ถอดสาย{device}ออกก่อน ฟังแค่เสียงคลิกของรีเลย์")
     print("-" * 72)
 
     relay = build_relay(cfg.relay, force_mock=args.mock)

@@ -1,5 +1,9 @@
 """
-ส่วนสั่งการ (The Action) — ควบคุมโมดูลรีเลย์ 1 ช่องเพื่อเปิด/ปิดปั๊มพ่นยา
+ส่วนสั่งการ (The Action) — ควบคุมโมดูลรีเลย์ 1 ช่องเพื่อเปิด/ปิดอุปกรณ์ปลายทาง
+
+อุปกรณ์ปลายทางคือปั๊มพ่นยา (ระบบจริง) หรือเลเซอร์ (prototype-v1 ที่ใช้นำเสนอผลงาน)
+ตั้งที่ relay.actuator ใน config.yaml — โค้ดในไฟล์นี้ทำงานเหมือนกันทุกบรรทัด
+ต่างแค่คำที่พิมพ์ออกคอนโซลของรีเลย์จำลอง
 
 ข้อควรระวังเรื่องความปลอดภัย 3 ข้อ:
   1. โมดูลรีเลย์ราคาถูกส่วนใหญ่เป็น Active LOW (ส่งสัญญาณ 0 = รีเลย์ทำงาน)
@@ -44,7 +48,7 @@ class BaseRelay(ABC):
         """เขียนสัญญาณลงขา GPIO จริง (คลาสลูกไปทำเอง)"""
 
     def on(self) -> None:
-        """เปิดปั๊ม (ไม่ทำอะไรถ้าเปิดอยู่แล้ว)"""
+        """สั่งอุปกรณ์ปลายทางทำงาน (ไม่ทำอะไรถ้าทำงานอยู่แล้ว)"""
         if self._is_on:
             return
         self._write(True)
@@ -53,7 +57,7 @@ class BaseRelay(ABC):
         self.activation_count += 1
 
     def off(self) -> None:
-        """ปิดปั๊ม (ไม่ทำอะไรถ้าปิดอยู่แล้ว)"""
+        """สั่งอุปกรณ์ปลายทางหยุด (ไม่ทำอะไรถ้าหยุดอยู่แล้ว)"""
         if not self._is_on:
             return
         self._write(False)
@@ -91,20 +95,37 @@ class BaseRelay(ABC):
         return False
 
 
+# คำที่รีเลย์จำลองใช้พิมพ์ออกคอนโซล ตาม relay.actuator — (คำไทย, คำอังกฤษ)
+MOCK_WORDS = {"pump": ("ปั๊ม", "SPRAY"), "laser": ("เลเซอร์", "LASER")}
+
+
 class MockRelay(BaseRelay):
     """รีเลย์จำลอง — ใช้บน PC ตอนพัฒนา แค่พิมพ์ข้อความแทนการสั่ง GPIO จริง"""
 
-    def __init__(self, pin: int, active_high: bool, verbose: bool = True) -> None:
+    def __init__(
+        self,
+        pin: int,
+        active_high: bool,
+        verbose: bool = True,
+        actuator: str = "pump",
+    ) -> None:
         super().__init__(pin, active_high)
         self.verbose = verbose
         self.history: list[tuple[float, bool]] = []
+        self.device_th, self.device_en = MOCK_WORDS.get(actuator, MOCK_WORDS["pump"])
         if verbose:
-            print(f"[relay] โหมดจำลอง (MOCK) — ไม่มีการสั่ง GPIO จริง | ขา {pin}")
+            print(
+                f"[relay] โหมดจำลอง (MOCK) — ไม่มีการสั่ง GPIO จริง | ขา {pin} "
+                f"| อุปกรณ์ {self.device_th}"
+            )
 
     def _write(self, energized: bool) -> None:
         self.history.append((time.monotonic(), energized))
         if self.verbose:
-            state = "เปิดปั๊ม  >>> SPRAY ON" if energized else "ปิดปั๊ม   <<< SPRAY OFF"
+            if energized:
+                state = f"เปิด{self.device_th}  >>> {self.device_en} ON"
+            else:
+                state = f"ปิด{self.device_th}   <<< {self.device_en} OFF"
             print(f"[relay] {state}")
 
 
@@ -190,7 +211,7 @@ def _looks_like_raspberry_pi() -> bool:
 def build_relay(cfg: RelayCfg, force_mock: bool = False) -> BaseRelay:
     """สร้างตัวควบคุมรีเลย์ตาม config (auto = ใช้ของจริงถ้าอยู่บน Pi)"""
     if force_mock or cfg.backend == "mock":
-        return MockRelay(cfg.pin, cfg.active_high)
+        return MockRelay(cfg.pin, cfg.active_high, actuator=cfg.actuator)
 
     if cfg.backend == "gpiozero":
         return GpiozeroRelay(cfg.pin, cfg.active_high)
@@ -200,7 +221,7 @@ def build_relay(cfg: RelayCfg, force_mock: bool = False) -> BaseRelay:
     # backend == "auto"
     if not _looks_like_raspberry_pi():
         print("[relay] ไม่ได้รันอยู่บน Raspberry Pi -> ใช้รีเลย์จำลองแทนโดยอัตโนมัติ")
-        return MockRelay(cfg.pin, cfg.active_high)
+        return MockRelay(cfg.pin, cfg.active_high, actuator=cfg.actuator)
 
     for builder in (GpiozeroRelay, RpiGpioRelay):
         try:
@@ -208,5 +229,6 @@ def build_relay(cfg: RelayCfg, force_mock: bool = False) -> BaseRelay:
         except RelayError as exc:
             print(f"[relay] {exc}")
 
-    print("[relay] เตือน: ควบคุม GPIO ไม่ได้ -> ถอยไปใช้รีเลย์จำลอง (ปั๊มจะไม่ทำงานจริง)")
-    return MockRelay(cfg.pin, cfg.active_high)
+    words = MOCK_WORDS.get(cfg.actuator, MOCK_WORDS["pump"])
+    print(f"[relay] เตือน: ควบคุม GPIO ไม่ได้ -> ถอยไปใช้รีเลย์จำลอง ({words[0]}จะไม่ทำงานจริง)")
+    return MockRelay(cfg.pin, cfg.active_high, actuator=cfg.actuator)

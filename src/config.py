@@ -64,7 +64,7 @@ class ModelCfg:
     num_threads: int = 4
 
     def validate(self) -> None:
-        allowed = {"auto", "ultralytics", "tflite", "roboflow"}
+        allowed = {"auto", "ultralytics", "tflite", "roboflow", "color"}
         if self.backend not in allowed:
             raise ConfigError(
                 f"model.backend ต้องเป็นหนึ่งใน {sorted(allowed)} (ได้รับ '{self.backend}')"
@@ -77,10 +77,18 @@ class ModelCfg:
             raise ConfigError(f"model.iou ต้องอยู่ระหว่าง 0 ถึง 1 (ได้รับ {self.iou})")
 
     def resolved_backend(self) -> str:
-        """แปลง backend='auto' เป็นค่าจริงโดยดูจากนามสกุลไฟล์น้ำหนักโมเดล"""
+        """แปลง backend='auto' เป็นค่าจริงโดยดูจากนามสกุลไฟล์น้ำหนักโมเดล
+
+        หมายเหตุ: backend 'color' (ตรวจจับด้วยสีล้วน ไม่ใช้โมเดล AI) ต้องระบุตรงๆ เท่านั้น
+        เพราะไม่มีไฟล์น้ำหนักให้เดาจากนามสกุล — ดูหมวด color ใน config.yaml
+        """
         if self.backend != "auto":
             return self.backend
         return "tflite" if self.weights.lower().endswith(".tflite") else "ultralytics"
+
+    def uses_weights_file(self) -> bool:
+        """เอนจิ้นที่เลือกไว้ต้องมีไฟล์น้ำหนักโมเดลหรือไม่"""
+        return self.resolved_backend() in {"ultralytics", "tflite"}
 
 
 @dataclass
@@ -119,10 +127,14 @@ class ClassCfg:
 
     # โหมดผกผัน (Inverse / Crop-vs-Non-crop detection):
     #   false (ค่าเริ่มต้น) -> ต้องมีคลาสวัชพืชในโมเดลจริงๆ ถึงจะพ่น (ตรรกะปกติ)
-    #   true  -> ไม่สนใจคลาส weed เลย พ่นทั้งเขต ROI ทันทีที่ "ไม่พบพืชเป้าหมายแม้แต่ต้นเดียว"
-    #            ในเขตนั้น เหมาะกับโมเดลที่สอนให้รู้จักแค่พืชหลัก (เช่น strawberry-ripe/unripe)
-    #            ไม่มีคลาสวัชพืชแยก ประหยัดการประมวลผลกว่าเพราะไม่ต้องคำนวณระยะห่าง/ซ้อนทับ
-    #            เป็นรายกล่อง แค่เช็คว่า "เจอพืชเป้าหมายในเขตพ่นหรือไม่" ครั้งเดียวต่อเฟรม
+    #   true  -> "พืชเป้าหมายเท่านั้นที่ห้ามแตะ" — พ่นทั้งเขต ROI ทันทีที่ไม่พบพืชเป้าหมาย
+    #            แม้แต่ต้นเดียวในเขตนั้น เหมาะกับโมเดลที่สอนให้รู้จักแค่พืชหลัก
+    #            (เช่น strawberry-ripe/unripe) ไม่มีคลาสวัชพืชแยก ประหยัดการประมวลผลกว่า
+    #            เพราะไม่ต้องคำนวณระยะห่าง/ซ้อนทับเป็นรายกล่อง แค่เช็คว่า "เจอพืชเป้าหมาย
+    #            ในเขตพ่นหรือไม่" ครั้งเดียวต่อเฟรม
+    #            ถ้าโมเดลบังเอิญมีคลาสวัชพืชด้วย (เช่น โหมดสีของ prototype-v1 ที่แดง=พืชหลัก
+    #            เขียว=วัชพืช) กล่องวัชพืชเหล่านั้นจะถูกใช้เป็นเป้าหมายการพ่นแทนกล่องสังเคราะห์
+    #            ทั้งเขต ทำให้ log และภาพผลลัพธ์ชี้ตำแหน่งจริงได้ แต่ "ผลการตัดสิน" ยังเหมือนเดิม
     #            ข้อควรระวัง: จะพ่นโดนดินเปล่า/พื้นที่ว่างที่ไม่มีทั้งพืชหลักและวัชพืชด้วย
     inverse_mode: bool = False
 
@@ -160,8 +172,9 @@ class ClassCfg:
                     )
             if self.inverse_mode and self.weed:
                 print(
-                    "[config] หมายเหตุ: classes.inverse_mode = true -> classes.weed "
-                    f"{self.weed} จะไม่ถูกใช้งาน (โหมดผกผันตัดสินใจจาก classes.target เท่านั้น)"
+                    "[config] หมายเหตุ: classes.inverse_mode = true -> ผลการตัดสินใจมาจาก "
+                    f"classes.target เท่านั้น ส่วน classes.weed {self.weed} ใช้แค่ชี้ตำแหน่ง"
+                    " ที่จะพ่น/ยิงในภาพและใน log (ไม่เปลี่ยนว่าจะทำงานหรือไม่)"
                 )
             self._warned = True
 
@@ -180,6 +193,112 @@ class ClassCfg:
     def conf_for(self, class_name: str, default_conf: float) -> float:
         """ค่า confidence ขั้นต่ำของคลาสนั้น (ถ้าไม่ตั้งไว้ ใช้ค่ากลางของโมเดล)"""
         return float(self.per_class_conf.get(class_name, default_conf))
+
+
+@dataclass
+class ColorBand:
+    """แถบสีหนึ่งสีที่ถอดค่าแล้วพร้อมใช้งาน (ผลลัพธ์ของ ColorCfg.bands())"""
+
+    class_id: int
+    name: str
+    hue_ranges: List[tuple]   # [(hue_min, hue_max), ...] — สีแดงคร่อมเลข 0 จึงมี 2 ช่วง
+    sat_min: int
+    val_min: int
+
+
+@dataclass
+class ColorCfg:
+    """ตัวตรวจจับด้วยสีล้วน (HSV Color Detector) — ใช้เมื่อ model.backend: color
+
+    ทำไมต้องมี: prototype-v1 เป็นเวอร์ชันสำหรับ "นำเสนอผลงาน" ที่ต้องสาธิตให้เห็นทันที
+    หน้างานโดยไม่ต้องแบกโมเดล/ชุดข้อมูลไปด้วย จึงแทนวัตถุจริงด้วยแผ่นสี:
+        สีแดง  = ต้นสตรอว์เบอร์รี (พืชเป้าหมาย) -> ห้ามยิงเลเซอร์
+        สีเขียว = วัชพืช                          -> ยิงเลเซอร์
+    ตรรกะการตัดสินใจ ROI/ยืนยันหลายเฟรม/กันค้าง ยังเป็นชุดเดียวกับระบบจริงทุกบรรทัด
+    เปลี่ยนแค่ "ตาที่ใช้มอง" เท่านั้น (ดู src/detector.py -> ColorDetector)
+
+    ค่า HSV ตามมาตรฐาน OpenCV: H = 0-179, S = 0-255, V = 0-255
+    (ต่างจากตำราทั่วไปที่ H = 0-359 — ของ OpenCV หารสอง เพราะเก็บใน uint8)
+    """
+
+    red_name: str = "red-object"
+    # สีแดงอยู่คร่อมจุดเริ่มต้นของวงล้อสี (hue ~0) จึงต้องใช้สองช่วงเสมอ
+    red_hue_ranges: List[List[int]] = field(default_factory=lambda: [[0, 10], [170, 179]])
+    red_sat_min: int = 90
+    red_val_min: int = 60
+
+    green_name: str = "green-object"
+    green_hue_ranges: List[List[int]] = field(default_factory=lambda: [[35, 85]])
+    green_sat_min: int = 70
+    green_val_min: int = 50
+
+    blur_ksize: int = 5        # เบลอก่อนแปลงเป็น HSV ลด noise ของเซนเซอร์ (0 = ไม่เบลอ)
+    morph_ksize: int = 5       # ขนาด kernel ของ open/close ลบจุดรบกวนและอุดรู (0 = ไม่ทำ)
+    min_area_frac: float = 0.004   # สัดส่วนพื้นที่กล่องต่อเฟรมขั้นต่ำ (ตัดจุดสีเล็กๆ ทิ้ง)
+    max_area_frac: float = 0.90    # สัดส่วนสูงสุด (ตัดกรณีแสงทั้งฉากเป็นสีนั้น)
+
+    def validate(self) -> None:
+        if not self.red_name.strip() or not self.green_name.strip():
+            raise ConfigError("color.red_name และ color.green_name ห้ามว่างเปล่า")
+        if self.red_name == self.green_name:
+            raise ConfigError("color.red_name และ color.green_name ต้องไม่ซ้ำกัน")
+
+        for key, ranges in (("red_hue_ranges", self.red_hue_ranges), ("green_hue_ranges", self.green_hue_ranges)):
+            if not isinstance(ranges, (list, tuple)) or not ranges:
+                raise ConfigError(f"color.{key} ต้องเป็นรายการช่วงสีอย่างน้อย 1 ช่วง เช่น [[35, 85]]")
+            for item in ranges:
+                if not isinstance(item, (list, tuple)) or len(item) != 2:
+                    raise ConfigError(f"color.{key} แต่ละช่วงต้องเป็น [hue_min, hue_max] (ได้รับ {item!r})")
+                try:
+                    low, high = int(item[0]), int(item[1])
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(f"color.{key} มีค่าที่ไม่ใช่จำนวนเต็ม: {item!r}") from exc
+                if not 0 <= low <= high <= 179:
+                    raise ConfigError(
+                        f"color.{key} ต้องอยู่ในช่วง 0-179 และ hue_min <= hue_max (ได้รับ {item!r})\n"
+                        "  หมายเหตุ: OpenCV ใช้ H 0-179 ไม่ใช่ 0-359"
+                    )
+
+        for key in ("red_sat_min", "red_val_min", "green_sat_min", "green_val_min"):
+            value = int(getattr(self, key))
+            if not 0 <= value <= 255:
+                raise ConfigError(f"color.{key} ต้องอยู่ระหว่าง 0 ถึง 255 (ได้รับ {value})")
+
+        for key in ("blur_ksize", "morph_ksize"):
+            value = int(getattr(self, key))
+            if value < 0:
+                raise ConfigError(f"color.{key} ต้องไม่ติดลบ (0 = ปิดการทำงานของขั้นนี้)")
+            if value and value % 2 == 0:
+                raise ConfigError(f"color.{key} ต้องเป็นเลขคี่ (ข้อกำหนดของ OpenCV) หรือ 0 (ได้รับ {value})")
+
+        if not 0.0 < self.min_area_frac < self.max_area_frac <= 1.0:
+            raise ConfigError(
+                "color.min_area_frac/max_area_frac ต้องอยู่ระหว่าง 0-1 และ min < max "
+                f"(ได้รับ min={self.min_area_frac}, max={self.max_area_frac})"
+            )
+
+    def bands(self) -> List[ColorBand]:
+        """คืนแถบสีทั้งหมดพร้อมใช้ เรียงตาม class id (0 = แดง, 1 = เขียว)
+
+        ลำดับนี้ต้องตรงกับ classes.names ใน config.yaml เพื่อให้ class_id ที่บันทึกลง
+        log สื่อความหมายเดียวกันกับฝั่งโมเดล AI
+        """
+        return [
+            ColorBand(
+                class_id=0,
+                name=self.red_name,
+                hue_ranges=[(int(a), int(b)) for a, b in self.red_hue_ranges],
+                sat_min=int(self.red_sat_min),
+                val_min=int(self.red_val_min),
+            ),
+            ColorBand(
+                class_id=1,
+                name=self.green_name,
+                hue_ranges=[(int(a), int(b)) for a, b in self.green_hue_ranges],
+                sat_min=int(self.green_sat_min),
+                val_min=int(self.green_val_min),
+            ),
+        ]
 
 
 @dataclass
@@ -268,11 +387,23 @@ class SprayCfg:
             raise ConfigError("spray.cooldown_seconds ต้องไม่ติดลบ")
 
 
+# อุปกรณ์ที่รีเลย์ไปต่ออยู่ — มีผลกับ "ข้อความที่แสดง" เท่านั้น ไม่เปลี่ยนตรรกะหรือสัญญาณ GPIO
+ACTUATORS = ("pump", "laser")
+
+
 @dataclass
 class RelayCfg:
     backend: str = "auto"
     pin: int = 17
     active_high: bool = False
+
+    # actuator: pump  -> ปั๊มพ่นยา (ระบบจริง)
+    #           laser -> เลเซอร์กำจัดวัชพืช (prototype-v1 ที่ใช้นำเสนอผลงาน)
+    # เปลี่ยนแค่คำที่แสดงบนหน้าจอ/คอนโซล ("ปั๊ม/พ่น" <-> "เลเซอร์/ยิง") เพื่อให้ภาพที่ผู้ชม
+    # เห็นตรงกับอุปกรณ์จริงที่ต่ออยู่ — ตรรกะการตัดสินใจ, สัญญาณ GPIO และคอลัมน์ในไฟล์ CSV
+    # ยังเหมือนเดิมทุกประการ (คอลัมน์ pump/เหตุการณ์ SPRAY_START ถูกเก็บไว้เพื่อให้เครื่องมือ
+    # วิเคราะห์ผลเดิม เช่น tools/report_events.py อ่านไฟล์เก่ากับไฟล์ใหม่ด้วยสคริปต์เดียวกันได้)
+    actuator: str = "pump"
 
     def validate(self) -> None:
         allowed = {"auto", "gpiozero", "rpigpio", "mock"}
@@ -282,6 +413,10 @@ class RelayCfg:
             )
         if not 0 <= self.pin <= 27:
             raise ConfigError(f"relay.pin ต้องเป็นเลข GPIO แบบ BCM ระหว่าง 0-27 (ได้รับ {self.pin})")
+        if self.actuator not in ACTUATORS:
+            raise ConfigError(
+                f"relay.actuator ต้องเป็นหนึ่งใน {sorted(ACTUATORS)} (ได้รับ '{self.actuator}')"
+            )
 
 
 @dataclass
@@ -323,6 +458,7 @@ class Config:
     model: ModelCfg = field(default_factory=ModelCfg)
     roboflow: RoboflowCfg = field(default_factory=RoboflowCfg)
     classes: ClassCfg = field(default_factory=ClassCfg)
+    color: ColorCfg = field(default_factory=ColorCfg)
     roi: RoiCfg = field(default_factory=RoiCfg)
     geometry_filter: GeomFilterCfg = field(default_factory=GeomFilterCfg)
     spray: SprayCfg = field(default_factory=SprayCfg)
@@ -446,6 +582,7 @@ def load_config(path: str | Path | None = None) -> Config:
         model=_build_section(ModelCfg, raw.get("model"), "model"),
         roboflow=_build_section(RoboflowCfg, raw.get("roboflow"), "roboflow"),
         classes=_build_section(ClassCfg, raw.get("classes"), "classes"),
+        color=_build_section(ColorCfg, raw.get("color"), "color"),
         roi=_build_section(RoiCfg, raw.get("roi"), "roi"),
         geometry_filter=_build_section(GeomFilterCfg, raw.get("geometry_filter"), "geometry_filter"),
         spray=_build_section(SprayCfg, raw.get("spray"), "spray"),

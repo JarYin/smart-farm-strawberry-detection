@@ -1,12 +1,15 @@
 """
-ส่วนตรวจจับวัตถุ (The Brain) — รองรับ 3 เอนจิ้น
+ส่วนตรวจจับวัตถุ (The Brain) — รองรับ 4 เอนจิ้น
 
   UltralyticsDetector : ใช้บน PC ตอนพัฒนา/ทดสอบ สะดวก แต่ลาก PyTorch มาด้วย (~2 GB)
   TFLiteDetector      : ใช้บน Raspberry Pi 4 ใช้แค่ tflite-runtime (~5 MB) เร็วและเบากว่ามาก
   RoboflowDetector    : เรียกโมเดลบนคลาวด์ผ่าน API ของ Roboflow — ใช้ทดสอบเท่านั้น
                         (ดูคำเตือนเรื่อง latency/อินเทอร์เน็ตในคลาสด้านล่าง)
+  ColorDetector       : ตรวจจับด้วย "สี" ล้วนๆ ผ่าน HSV ไม่ใช้โมเดล AI เลย —
+                        ใช้กับ prototype-v1 ที่แทนสตรอว์เบอร์รีด้วยแผ่นสีแดง
+                        และวัชพืชด้วยแผ่นสีเขียว เพื่อสาธิตระบบหน้างาน
 
-ทั้งสามตัวคืนค่าเป็น list[Detection] เหมือนกัน โค้ดหลักจึงสลับใช้ได้ทันที
+ทั้งสี่ตัวคืนค่าเป็น list[Detection] เหมือนกัน โค้ดหลักจึงสลับใช้ได้ทันที
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .config import Config
+from .config import ColorBand, ColorCfg, Config
 from .detection import Detection
 from .vision_utils import class_aware_nms, letterbox, scale_boxes_back, xywh2xyxy
 
@@ -519,6 +522,165 @@ class RoboflowDetector(BaseDetector):
 
 
 # ---------------------------------------------------------------------------
+# เอนจิ้นที่ 4: ตรวจจับด้วยสี (สำหรับ prototype-v1 ที่ใช้นำเสนอผลงาน)
+# ---------------------------------------------------------------------------
+
+
+class ColorDetector(BaseDetector):
+    """ตรวจจับวัตถุจาก "สี" ด้วย HSV + contour — ไม่ใช้โมเดล AI และไม่ต้องมีไฟล์น้ำหนัก
+
+    ใช้ในเวอร์ชันต้นแบบสำหรับนำเสนอผลงาน (prototype-v1) ที่แทนวัตถุจริงด้วยแผ่นสี:
+        สีแดง  -> ต้นสตรอว์เบอร์รี (พืชเป้าหมาย)
+        สีเขียว -> วัชพืช
+    ทำให้สาธิตได้ทุกที่ทันที ไม่ต้องมีต้นไม้จริง ไม่ต้องรอโหลดโมเดล และผู้ชมเห็นเหตุ-ผล
+    ของระบบชัดเจน (ยกแผ่นสีอะไรขึ้นมา ระบบตอบสนองอย่างไร)
+
+    ขั้นตอนต่อ 1 เฟรม:
+        1. เบลอเล็กน้อย (GaussianBlur) ลด noise ของเซนเซอร์กล้อง ไม่งั้นจะได้จุดสีกระจาย
+        2. แปลง BGR -> HSV เพราะ HSV แยก "เนื้อสี (H)" ออกจาก "ความสว่าง (V)" ได้
+           จึงทนต่อแสงที่เปลี่ยนไปมากกว่าการเทียบค่า RGB ตรงๆ
+        3. ทำ mask ด้วย cv2.inRange ทีละแถบสี (สีแดงคร่อม hue 0 จึงต้องรวมสองช่วง)
+        4. morphology open (ลบจุดเล็ก) แล้ว close (อุดรูในแผ่นสี)
+        5. หา contour ภายนอก -> กรอบสี่เหลี่ยม -> กรองด้วยขนาดเทียบเฟรม
+
+    ค่า confidence ที่คืนออกไปคือ "อัตราส่วนพื้นที่สีจริงต่อพื้นที่กรอบ" (fill ratio)
+    ซึ่งอยู่ในช่วง 0-1 เหมือนคะแนนของโมเดล AI จึงไหลผ่านเกณฑ์ model.conf /
+    classes.per_class_conf และตรรกะเดิมได้ทั้งหมดโดยไม่ต้องแก้อะไร
+    ความหมายคือ "ก้อนสีนี้เป็นแผ่นทึบจริงหรือแค่ขอบสีเลอะๆ" — แผ่นสี่เหลี่ยมจะได้ ~0.9-1.0
+    วงกลมได้ ~0.79 ส่วนเงาสะท้อน/ขอบวัตถุที่บังเอิญเป็นสีนั้นจะได้ค่าต่ำและถูกตัดทิ้ง
+    """
+
+    def __init__(
+        self,
+        color_cfg: ColorCfg,
+        conf: float = 0.25,
+        max_det: int = 20,
+    ) -> None:
+        self.bands: list[ColorBand] = color_cfg.bands()
+        super().__init__([band.name for band in self.bands], conf, iou=0.0, max_det=max_det)
+
+        self.cfg = color_cfg
+        self.blur_ksize = int(color_cfg.blur_ksize)
+        self.morph_ksize = int(color_cfg.morph_ksize)
+        self.min_area_frac = float(color_cfg.min_area_frac)
+        self.max_area_frac = float(color_cfg.max_area_frac)
+        self._kernel = None  # สร้างครั้งเดียวตอนใช้จริง เพื่อไม่ต้อง import cv2 ตอนสร้างอ็อบเจกต์
+
+        detail = " | ".join(
+            f"{band.name}: H{band.hue_ranges} S>={band.sat_min} V>={band.val_min}"
+            for band in self.bands
+        )
+        print(f"[detector] ใช้การตรวจจับด้วยสี (HSV) — ไม่ใช้โมเดล AI\n           {detail}")
+        print(
+            f"[detector] เกณฑ์ขนาดกล่อง {self.min_area_frac:.3f}-{self.max_area_frac:.3f} "
+            f"ของพื้นที่เฟรม | fill ratio ขั้นต่ำ {self.conf:.2f}"
+        )
+
+    # -- ขั้นตอนที่ 1-2: เตรียมภาพเป็น HSV --------------------------------------
+
+    def to_hsv(self, frame: np.ndarray) -> np.ndarray:
+        import cv2
+
+        if self.blur_ksize >= 3:
+            frame = cv2.GaussianBlur(frame, (self.blur_ksize, self.blur_ksize), 0)
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    # -- ขั้นตอนที่ 3-4: ทำ mask ของแถบสีหนึ่งสี ---------------------------------
+
+    def band_mask(self, hsv: np.ndarray, band: ColorBand) -> np.ndarray:
+        """คืนภาพขาวดำ (0/255) ที่จุดขาว = พิกเซลที่อยู่ในแถบสีนี้"""
+        import cv2
+
+        mask: np.ndarray | None = None
+        for hue_min, hue_max in band.hue_ranges:
+            lower = np.array([hue_min, band.sat_min, band.val_min], dtype=np.uint8)
+            upper = np.array([hue_max, 255, 255], dtype=np.uint8)
+            part = cv2.inRange(hsv, lower, upper)
+            mask = part if mask is None else cv2.bitwise_or(mask, part)
+
+        if mask is None:  # pragma: no cover - ConfigError กันไว้แล้วว่าต้องมีอย่างน้อย 1 ช่วง
+            return np.zeros(hsv.shape[:2], dtype=np.uint8)
+
+        if self.morph_ksize >= 3:
+            if self._kernel is None:
+                self._kernel = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (self.morph_ksize, self.morph_ksize)
+                )
+            # open ก่อน close เสมอ: ลบจุดรบกวนเล็กๆ ให้หมดก่อน ไม่งั้น close จะเชื่อม
+            # จุดรบกวนที่อยู่ใกล้กันกลายเป็นก้อนใหญ่ปลอมๆ
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
+        return mask
+
+    # -- ขั้นตอนที่ 5: contour -> กรอบ ------------------------------------------
+
+    def boxes_from_mask(
+        self, mask: np.ndarray, band: ColorBand, frame_shape: tuple[int, int]
+    ) -> list[Detection]:
+        import cv2
+
+        height, width = frame_shape
+        frame_area = float(max(height * width, 1))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        detections: list[Detection] = []
+        for contour in contours:
+            x, y, box_w, box_h = cv2.boundingRect(contour)
+            box_area = float(box_w * box_h)
+            if box_area <= 0:
+                continue
+
+            area_frac = box_area / frame_area
+            if not self.min_area_frac <= area_frac <= self.max_area_frac:
+                continue
+
+            fill_ratio = min(1.0, float(cv2.contourArea(contour)) / box_area)
+            if fill_ratio < self.conf:
+                continue
+
+            detections.append(
+                Detection(
+                    class_id=band.class_id,
+                    class_name=band.name,
+                    confidence=fill_ratio,
+                    x1=float(x),
+                    y1=float(y),
+                    x2=float(x + box_w),
+                    y2=float(y + box_h),
+                )
+            )
+        return detections
+
+    # -- รวมทุกขั้นตอน -----------------------------------------------------------
+
+    def infer(self, frame: np.ndarray) -> list[Detection]:
+        t0 = time.perf_counter()
+        hsv = self.to_hsv(frame)
+
+        t1 = time.perf_counter()
+        masks = [self.band_mask(hsv, band) for band in self.bands]
+
+        t2 = time.perf_counter()
+        frame_shape = frame.shape[:2]
+        detections: list[Detection] = []
+        for band, mask in zip(self.bands, masks):
+            detections.extend(self.boxes_from_mask(mask, band, frame_shape))
+
+        # เรียงจากก้อนสีใหญ่สุดไปเล็กสุด แล้วตัดเหลือ max_det ก้อน — ก้อนใหญ่คือแผ่นสีที่
+        # ผู้สาธิตยกขึ้นมา ส่วนก้อนเล็กมักเป็นวัตถุสีเดียวกันที่ติดมาในฉากหลัง
+        detections.sort(key=lambda det: det.area, reverse=True)
+        detections = detections[: self.max_det]
+        t3 = time.perf_counter()
+
+        self.last_timing_ms = {
+            "preprocess": (t1 - t0) * 1000.0,
+            "inference": (t2 - t1) * 1000.0,
+            "postprocess": (t3 - t2) * 1000.0,
+        }
+        return detections
+
+
+# ---------------------------------------------------------------------------
 # ตัวช่วยสร้าง detector ตาม config
 # ---------------------------------------------------------------------------
 
@@ -530,6 +692,8 @@ def effective_conf(cfg: Config) -> float:
     ยังกรองด้วยค่ากลางอยู่ วัตถุคลาสนั้นจะถูกทิ้งตั้งแต่ต้นทาง ไม่มีวันไปถึงชั้นตรรกะ
     จึงต้องกรองด้วยค่าที่ "ต่ำที่สุด" ไว้ก่อน แล้วปล่อยให้ชั้นตรรกะบังคับเกณฑ์
     ที่เข้มกว่าของแต่ละคลาสอีกที (ดู logic.SprayController)
+
+    สำหรับ backend 'color' ค่านี้คือเกณฑ์ fill ratio ขั้นต่ำของก้อนสี (ดู ColorDetector)
     """
     values = [cfg.model.conf, *(float(v) for v in cfg.classes.per_class_conf.values())]
     return max(0.01, min(values))
@@ -539,6 +703,26 @@ def build_detector(cfg: Config) -> BaseDetector:
     """สร้างตัวตรวจจับตามที่ตั้งค่าไว้ใน config.yaml"""
     backend = cfg.model.resolved_backend()
     conf = effective_conf(cfg)
+
+    if backend == "color":
+        detector = ColorDetector(
+            color_cfg=cfg.color,
+            conf=conf,
+            max_det=cfg.model.max_det,
+        )
+        # ชื่อแถบสีต้องตรงกับ classes.target / classes.weed ไม่งั้น logic จะจัดทุกกล่อง
+        # เป็น "คลาสที่ไม่รู้จัก" แล้วระบบจะตัดสินใจผิดทั้งหมด (เตือนแบบเดียวกับฝั่ง ultralytics)
+        roles = {name: cfg.classes.role_of(name) for name in detector.class_names}
+        orphans = [name for name, role in roles.items() if role == "unknown"]
+        if orphans:
+            print(
+                "[detector] เตือน: ชื่อสีในหมวด color ไม่ได้ถูกจัดบทบาทไว้ใน classes\n"
+                f"  ไม่มีบทบาท : {orphans}\n"
+                f"  target     : {cfg.classes.target}\n"
+                f"  weed       : {cfg.classes.weed}\n"
+                "  -> แก้ config.yaml ให้ชื่อตรงกัน ไม่งั้นสีนั้นจะถูกมองข้ามทั้งหมด"
+            )
+        return detector
 
     if backend == "roboflow":
         # จุดเดียวที่อ่าน API key จากตัวแปรสภาพแวดล้อม — ไม่มีที่อื่นในโปรเจกต์แตะค่านี้

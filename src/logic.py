@@ -83,6 +83,8 @@ class SprayController:
         base_conf: float = 0.45,
         clock: Callable[[], float] = time.monotonic,
         geom_cfg: GeomFilterCfg | None = None,
+        action_word: str = "พ่น",
+        device_word: str = "ปั๊ม",
     ) -> None:
         self.spray = spray_cfg
         self.roi = roi_cfg
@@ -90,6 +92,12 @@ class SprayController:
         self.base_conf = float(base_conf)
         self.clock = clock
         self.geom = geom_cfg or GeomFilterCfg()
+
+        # คำที่ใช้ประกอบ "เหตุผล" ที่ส่งออกไปยังคอนโซลและไฟล์ CSV — ระบบจริงต่อปั๊มพ่นยา
+        # ส่วน prototype-v1 ต่อเลเซอร์ (ดู relay.actuator ใน config.yaml) ตรรกะเหมือนกันทุก
+        # บรรทัด ต่างแค่คำเรียกอุปกรณ์ ค่าเริ่มต้นเป็นคำของระบบปั๊มเพื่อไม่ให้ผู้เรียกเดิมเปลี่ยนพฤติกรรม
+        self.action_word = action_word   # "พ่น" / "ยิง"
+        self.device_word = device_word   # "ปั๊ม" / "เลเซอร์"
 
         self.state = STATE_IDLE
         self.hit_streak = 0
@@ -167,22 +175,35 @@ class SprayController:
 
         for weed in analysis.weeds:
             if roi_box is not None and not self._in_roi(weed, roi_box):
-                analysis.suppressed_weeds.append((weed, "อยู่นอกระยะหัวฉีด (ROI)"))
+                analysis.suppressed_weeds.append((weed, f"อยู่นอกเขต{self.action_word} (ROI)"))
                 continue
 
             if protected_boxes and any(boxes_overlap(weed.box, box) for box in protected_boxes):
-                analysis.suppressed_weeds.append((weed, "อยู่ชิดพืชเป้าหมาย งดพ่นเพื่อไม่ให้พืชหลักเสียหาย"))
+                analysis.suppressed_weeds.append(
+                    (weed, f"อยู่ชิดพืชเป้าหมาย งด{self.action_word}เพื่อไม่ให้พืชหลักเสียหาย")
+                )
                 continue
 
             analysis.actionable_weeds.append(weed)
 
     def _analyze_inverse(self, analysis: FrameAnalysis, roi_box, width: int, height: int) -> None:
-        """โหมดผกผัน (Inverse / Crop-vs-Non-crop): ไม่มีคลาสวัชพืชในโมเดล
+        """โหมดผกผัน (Inverse / Crop-vs-Non-crop): "พืชเป้าหมายเท่านั้นที่ห้ามแตะ"
 
         ถือว่า "สิ่งที่ไม่ใช่พืชเป้าหมาย" ทั้งหมดคือสิ่งที่ต้องพ่น ตรวจแค่ว่ามีพืช
         เป้าหมายอยู่ในเขตพ่น (ROI) หรือไม่ — เช็คบูลีนครั้งเดียวต่อเฟรม ไม่ต้องคำนวณ
         ระยะห่างหรือ IoU เป็นรายคู่กล่องเหมือนโหมดปกติ เบากว่ามากบนบอร์ดที่ทรัพยากรจำกัด
         เช่น Raspberry Pi 4
+
+        ตารางการตัดสินใจ (เขต = ROI ถ้าเปิดใช้ ไม่งั้นคือทั้งเฟรม):
+
+            พบพืชเป้าหมายในเขต            -> ไม่ทำงาน (งดทั้งเขต ป้องกันพืชหลักไว้ก่อน)
+            ไม่พบพืชเป้าหมาย + พบวัชพืช    -> ทำงาน โดยชี้เป้าไปที่กล่องวัชพืชจริง
+            ไม่พบอะไรเลยในเขต             -> ทำงาน โดยใช้กล่องสังเคราะห์ครอบทั้งเขต
+
+        สองบรรทัดท้ายให้ "ผลการตัดสิน" เหมือนกัน (ทำงานทั้งคู่) ต่างกันแค่ตำแหน่งที่
+        รายงานออกไป — ถ้าโมเดลบอกตำแหน่งวัชพืชได้จริง ก็ควรบันทึกตำแหน่งนั้นลง log และ
+        วาดกรอบให้ตรงจุด ดีกว่ารายงานเป็นสี่เหลี่ยมคลุมทั้งเขตซึ่งไม่ได้บอกอะไรเลย
+        (กรณีนี้เกิดกับ prototype-v1 ที่แผ่นสีเขียว = วัชพืช เป็นคลาสจริงในตัวตรวจจับ)
 
         ข้อควรระวัง: จะพ่นโดนดินเปล่า/พื้นที่ว่างที่ไม่มีทั้งพืชหลักและวัชพืชด้วย
         เพราะระบบแยกไม่ออกระหว่าง "วัชพืช" กับ "ไม่มีอะไรเลย" — เป็นการยอมแลก
@@ -190,6 +211,14 @@ class SprayController:
         """
         zone_box = roi_box if roi_box is not None else (0, 0, width, height)
         target_in_zone = any(self._in_roi(t, zone_box) for t in analysis.targets)
+
+        # แยกวัชพืช (ถ้าตัวตรวจจับรู้จักคลาสวัชพืชจริง) ออกเป็นในเขต/นอกเขตก่อน
+        weeds_in_zone: list[Detection] = []
+        for weed in analysis.weeds:
+            if self._in_roi(weed, zone_box):
+                weeds_in_zone.append(weed)
+            else:
+                analysis.suppressed_weeds.append((weed, f"อยู่นอกเขต{self.action_word} (ROI)"))
 
         # สร้างกล่องสังเคราะห์ครอบคลุมทั้งเขตพ่น เพื่อให้ไหลผ่าน pipeline เดิม
         # (เครื่องสถานะ, การวาดกรอบ, การบันทึก log) ได้เหมือนกล่องวัชพืชจริง
@@ -204,9 +233,15 @@ class SprayController:
         )
 
         if target_in_zone:
-            analysis.suppressed_weeds.append(
-                (zone_detection, "พบพืชเป้าหมายในเขตพ่น งดพ่นทั้งเขตเพื่อป้องกันพืชหลัก (โหมดผกผัน)")
+            reason = (
+                f"พบพืชเป้าหมายในเขต{self.action_word} งด{self.action_word}ทั้งเขต"
+                "เพื่อป้องกันพืชหลัก (โหมดผกผัน)"
             )
+            analysis.suppressed_weeds.append((zone_detection, reason))
+            for weed in weeds_in_zone:
+                analysis.suppressed_weeds.append((weed, reason))
+        elif weeds_in_zone:
+            analysis.actionable_weeds.extend(weeds_in_zone)
         else:
             analysis.actionable_weeds.append(zone_detection)
 
@@ -250,7 +285,7 @@ class SprayController:
                 self.state = STATE_IDLE
             else:
                 remaining = self.spray.cooldown_seconds - (now - stopped_at)
-                reason = f"อยู่ในช่วงพักหลังพ่น เหลืออีก {remaining:.1f} วินาที"
+                reason = f"อยู่ในช่วงพักหลัง{self.action_word} เหลืออีก {remaining:.1f} วินาที"
 
         # --- ว่างอยู่: เจอวัชพืชติดกันครบตามกำหนดหรือยัง ---
         if self.state == STATE_IDLE:
@@ -260,7 +295,9 @@ class SprayController:
                 self.spray_events += 1
                 best = analysis.best_weed
                 detail = f" ({best.class_name} {best.confidence:.2f})" if best else ""
-                reason = f"ยืนยันพบวัชพืชครบ {self.hit_streak} เฟรมติดกัน{detail} -> เริ่มพ่น"
+                reason = (
+                    f"ยืนยันพบวัชพืชครบ {self.hit_streak} เฟรมติดกัน{detail} -> เริ่ม{self.action_word}"
+                )
             elif not reason:
                 if weed_present:
                     reason = f"กำลังยืนยัน {self.hit_streak}/{self.spray.confirm_frames} เฟรม"
@@ -281,18 +318,27 @@ class SprayController:
                 self._stop_spraying(now, elapsed)
                 self.cutoff_events += 1
                 reason = (
-                    f"ตัดการพ่นอัตโนมัติ: พ่นต่อเนื่องครบ {self.spray.max_on_seconds:.1f} วินาที "
-                    "(ระบบกันปั๊มค้าง)"
+                    f"ตัดการ{self.action_word}อัตโนมัติ: {self.action_word}ต่อเนื่องครบ "
+                    f"{self.spray.max_on_seconds:.1f} วินาที (ระบบกัน{self.device_word}ค้าง)"
                 )
             elif self.miss_streak >= self.spray.release_frames and elapsed >= self.spray.min_on_seconds:
                 self._stop_spraying(now, elapsed)
-                reason = f"ไม่พบวัชพืชติดกัน {self.miss_streak} เฟรม -> หยุดพ่น"
+                reason = f"ไม่พบวัชพืชติดกัน {self.miss_streak} เฟรม -> หยุด{self.action_word}"
             elif weed_present:
-                reason = f"กำลังพ่น {elapsed:.1f} วินาที (ยังพบวัชพืช {len(analysis.actionable_weeds)} จุด)"
+                reason = (
+                    f"กำลัง{self.action_word} {elapsed:.1f} วินาที "
+                    f"(ยังพบวัชพืช {len(analysis.actionable_weeds)} จุด)"
+                )
             elif elapsed < self.spray.min_on_seconds:
-                reason = f"กำลังพ่น {elapsed:.1f} วินาที (ยังไม่ถึงเวลาพ่นขั้นต่ำ)"
+                reason = (
+                    f"กำลัง{self.action_word} {elapsed:.1f} วินาที "
+                    f"(ยังไม่ถึงเวลา{self.action_word}ขั้นต่ำ)"
+                )
             else:
-                reason = f"กำลังพ่น {elapsed:.1f} วินาที (รอครบ {self.spray.release_frames} เฟรมก่อนหยุด)"
+                reason = (
+                    f"กำลัง{self.action_word} {elapsed:.1f} วินาที "
+                    f"(รอครบ {self.spray.release_frames} เฟรมก่อนหยุด)"
+                )
 
         is_on = self.state == STATE_SPRAYING
         spray_elapsed = (
@@ -319,7 +365,7 @@ class SprayController:
     # -- ส่วนเสริม ---------------------------------------------------------------
 
     def force_stop(self, now: float | None = None) -> None:
-        """สั่งหยุดพ่นทันที (ใช้ตอนปิดโปรแกรมหรือกดปุ่มฉุกเฉิน)"""
+        """สั่งหยุดทำงานทันที (ใช้ตอนปิดโปรแกรมหรือกดปุ่มฉุกเฉิน)"""
         now = self.clock() if now is None else float(now)
         if self.state == STATE_SPRAYING:
             started_at = now if self._spray_started_at is None else self._spray_started_at

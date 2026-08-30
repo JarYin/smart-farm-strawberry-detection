@@ -1,14 +1,16 @@
 """
-โปรแกรมหลัก — วนลูป: รับภาพ -> AI วิเคราะห์ -> ตัดสินใจ -> สั่งรีเลย์
+โปรแกรมหลัก — วนลูป: รับภาพ -> วิเคราะห์ -> ตัดสินใจ -> สั่งรีเลย์
 
 รันบน PC (ทดสอบ):
     python -m src.main
 รันบน Raspberry Pi (ใช้งานจริง):
     python -m src.main --source picamera2 --weights models/best_float32.tflite --headless
+รันโหมดต้นแบบนำเสนอ (prototype-v1) ที่ตรวจจับด้วยสีแดง/เขียวแทนโมเดล AI:
+    python -m src.main --backend color
 
 ปุ่มลัดขณะรัน (เฉพาะเมื่อเปิดหน้าต่างแสดงผล):
     q / ESC = ออก        p = หยุดชั่วคราว
-    s       = บันทึกภาพ   x = หยุดพ่นฉุกเฉิน
+    s       = บันทึกภาพ   x = หยุดทำงานฉุกเฉิน (ปิดปั๊ม/เลเซอร์ทันที)
 """
 
 from __future__ import annotations
@@ -69,6 +71,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--path", help="พาธไฟล์วิดีโอหรือโฟลเดอร์ภาพ (ใช้กับ --source video/images)")
     parser.add_argument("--index", type=int, help="หมายเลขกล้องเว็บแคม")
     parser.add_argument("--weights", help="พาธไฟล์โมเดล (.pt หรือ .tflite)")
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "ultralytics", "tflite", "roboflow", "color"],
+        help="เอนจิ้นตรวจจับ (color = ตรวจจับด้วยสีแดง/เขียว ไม่ใช้โมเดล AI)",
+    )
     parser.add_argument("--conf", type=float, help="ค่า confidence ขั้นต่ำ (แทนค่าใน config)")
     parser.add_argument("--headless", action="store_true", help="ไม่เปิดหน้าต่างแสดงผล (ใช้บน Pi)")
     parser.add_argument("--show", action="store_true", help="บังคับเปิดหน้าต่างแสดงผล")
@@ -89,6 +96,8 @@ def apply_overrides(cfg, args) -> None:
         cfg.camera.index = args.index
     if args.weights:
         cfg.model.weights = args.weights
+    if args.backend:
+        cfg.model.backend = args.backend
     if args.conf is not None:
         cfg.model.conf = args.conf
     if args.headless:
@@ -139,14 +148,22 @@ def _log_decision(logger: EventLogger, frame_no: int, decision, fps: float, timi
 def run(cfg, args) -> int:
     global _should_stop
 
+    labels = overlay.labels_for(cfg.relay.actuator)
+    backend = cfg.model.resolved_backend()
+
     print("=" * 72)
-    print(" Smart Farm Autonomous Robot — ระบบตรวจจับวัชพืชและสั่งพ่นยาอัตโนมัติ")
+    print(" Smart Farm Autonomous Robot — ระบบตรวจจับวัชพืชและสั่งการอัตโนมัติ")
     print("=" * 72)
     print(f" ไฟล์ตั้งค่า : {cfg.source_path}")
     print(f" แหล่งภาพ   : {cfg.camera.source}")
-    print(f" โมเดล      : {cfg.model.weights}  (เอนจิ้น {cfg.model.resolved_backend()})")
+    if backend == "color":
+        print(" เอนจิ้น    : color — ตรวจจับด้วยสี (HSV) ไม่ใช้โมเดล AI")
+        print(f" แถบสี      : แดง='{cfg.color.red_name}' | เขียว='{cfg.color.green_name}'")
+    else:
+        print(f" โมเดล      : {cfg.model.weights}  (เอนจิ้น {backend})")
     print(f" คลาส       : เป้าหมาย={cfg.classes.target} | วัชพืช={cfg.classes.weed}")
     print(f" เกณฑ์ conf : กลาง={cfg.model.conf} | รายคลาส={cfg.classes.per_class_conf or 'ไม่ได้ตั้ง'}")
+    print(f" อุปกรณ์    : {labels.device_th} (relay.actuator = {cfg.relay.actuator})")
     print("-" * 72)
 
     detector = build_detector(cfg)
@@ -158,6 +175,8 @@ def run(cfg, args) -> int:
         class_cfg=cfg.classes,
         base_conf=effective_conf(cfg),
         geom_cfg=cfg.geometry_filter,
+        action_word=labels.action_th,
+        device_word=labels.device_th,
     )
     logger = EventLogger(
         cfg.resolve_path(cfg.runtime.log_csv) if cfg.runtime.log_csv else "",
@@ -214,7 +233,10 @@ def run(cfg, args) -> int:
             if decision.changed:
                 event = "SPRAY_START" if decision.spray_on else "SPRAY_STOP"
                 _log_decision(logger, frame_no, decision, fps, timing, event)
-                print(f"[{datetime.now():%H:%M:%S}] {event}: {decision.reason}")
+                verb = "เริ่ม" if decision.spray_on else "หยุด"
+                print(
+                    f"[{datetime.now():%H:%M:%S}] {event} ({verb}{labels.action_th}): {decision.reason}"
+                )
 
                 if decision.spray_on and cfg.runtime.save_snapshots:
                     shot = overlay.render(
@@ -223,6 +245,7 @@ def run(cfg, args) -> int:
                         fps,
                         cfg.roi.pixel_box(frame.shape[1], frame.shape[0]) if cfg.roi.enabled else None,
                         timing,
+                        labels=labels,
                     )
                     shot_path = snapshot_dir / f"spray_{datetime.now():%Y%m%d_%H%M%S_%f}.jpg"
                     imwrite(shot_path, shot)
@@ -230,7 +253,7 @@ def run(cfg, args) -> int:
             if cfg.runtime.print_every and frame_no % cfg.runtime.print_every == 0:
                 print(
                     f"[{frame_no:>6}] {fps:5.1f} FPS | {decision.state:<9}"
-                    f" | ปั๊ม {'เปิด' if decision.spray_on else 'ปิด '}"
+                    f" | {labels.device_th} {'เปิด' if decision.spray_on else 'ปิด '}"
                     f" | วัชพืช {len(decision.analysis.actionable_weeds)}"
                     f" พืชหลัก {len(decision.analysis.targets)}"
                     f" | {decision.reason}"
@@ -243,7 +266,7 @@ def run(cfg, args) -> int:
                     f"frame {frame_no} | hit {decision.hit_streak}/{cfg.spray.confirm_frames}"
                     f" | miss {decision.miss_streak}/{cfg.spray.release_frames}"
                 )
-                canvas = overlay.render(frame, decision, fps, roi_box, timing, footer)
+                canvas = overlay.render(frame, decision, fps, roi_box, timing, footer, labels)
 
                 if cfg.runtime.save_video:
                     if writer is None:
@@ -279,7 +302,7 @@ def run(cfg, args) -> int:
                     elif key == ord("x"):
                         controller.force_stop()
                         relay.off()
-                        print("[main] หยุดพ่นฉุกเฉิน — ปิดปั๊มแล้ว")
+                        print(f"[main] หยุด{labels.action_th}ฉุกเฉิน — ปิด{labels.device_th}แล้ว")
 
             if args.max_frames and frame_no >= args.max_frames:
                 print(f"[main] ครบ {args.max_frames} เฟรมตามที่กำหนด -> หยุดทำงาน")
@@ -303,13 +326,14 @@ def run(cfg, args) -> int:
         if cfg.runtime.show_window and cv2 is not None:
             cv2.destroyAllWindows()
 
-        _print_summary(controller, relay, fps_meter, frame_no, cfg)
+        _print_summary(controller, relay, fps_meter, frame_no, cfg, labels)
 
     return 0
 
 
-def _print_summary(controller, relay, fps_meter, frame_no: int, cfg) -> None:
+def _print_summary(controller, relay, fps_meter, frame_no: int, cfg, labels) -> None:
     stats = controller.summary()
+    action = labels.action_th
     print("\n" + "=" * 72)
     print(" สรุปผลการทำงาน")
     print("=" * 72)
@@ -317,11 +341,14 @@ def _print_summary(controller, relay, fps_meter, frame_no: int, cfg) -> None:
     print(f" จำนวนเฟรมที่ประมวลผล : {frame_no}")
     print(f" FPS เฉลี่ย            : {fps_meter.average_fps:.2f}")
     print(f" เฟรมที่พบวัชพืช       : {stats['frames_with_weed']} ({stats['weed_frame_percent']}%)")
-    print(f" จำนวนครั้งที่สั่งพ่น    : {stats['spray_events']}")
-    print(f" เวลาพ่นรวม           : {stats['total_spray_seconds']} วินาที")
-    print(f" เวลาพ่นเฉลี่ยต่อครั้ง   : {stats['avg_spray_seconds']} วินาที")
-    print(f" ถูกตัดเพราะพ่นนานเกิน  : {stats['max_duration_cutoffs']} ครั้ง")
-    print(f" สถานะปั๊มตอนจบ       : {'เปิดอยู่ (ผิดปกติ!)' if relay.is_on else 'ปิดเรียบร้อย'}")
+    print(f" จำนวนครั้งที่สั่ง{action}    : {stats['spray_events']}")
+    print(f" เวลา{action}รวม           : {stats['total_spray_seconds']} วินาที")
+    print(f" เวลา{action}เฉลี่ยต่อครั้ง   : {stats['avg_spray_seconds']} วินาที")
+    print(f" ถูกตัดเพราะ{action}นานเกิน  : {stats['max_duration_cutoffs']} ครั้ง")
+    print(
+        f" สถานะ{labels.device_th}ตอนจบ       : "
+        f"{'เปิดอยู่ (ผิดปกติ!)' if relay.is_on else 'ปิดเรียบร้อย'}"
+    )
     if cfg.runtime.log_csv:
         print(f" ไฟล์บันทึกเหตุการณ์   : {cfg.resolve_path(cfg.runtime.log_csv)}")
     print("=" * 72)

@@ -105,8 +105,14 @@ def main() -> int:
     print(" วัดความเร็วการประมวลผล (Benchmark)")
     print("=" * 72)
     print(f" เครื่อง  : {describe_machine()}")
-    print(f" โมเดล   : {cfg.model.weights}  (เอนจิ้น {cfg.model.resolved_backend()})")
-    print(f" ขนาดภาพ : {cfg.model.imgsz}x{cfg.model.imgsz}")
+    backend = cfg.model.resolved_backend()
+    if backend == "color":
+        print(" เอนจิ้น  : color — ตรวจจับด้วยสี (HSV) ไม่ใช้โมเดล AI")
+        print(f" แถบสี    : แดง='{cfg.color.red_name}' | เขียว='{cfg.color.green_name}'")
+        print(f" ขนาดภาพ : {cfg.camera.width}x{cfg.camera.height} (ประมวลผลที่ความละเอียดเต็มของเฟรม)")
+    else:
+        print(f" โมเดล   : {cfg.model.weights}  (เอนจิ้น {backend})")
+        print(f" ขนาดภาพ : {cfg.model.imgsz}x{cfg.model.imgsz}")
     print("-" * 72)
 
     detector = build_detector(cfg)
