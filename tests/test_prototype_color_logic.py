@@ -251,7 +251,7 @@ def test_ระบบตัดการยิงเมื่อทำงาน�
 
     assert decision.spray_on is False
     assert controller.cutoff_events == 1
-    assert "เลเซอร์" in decision.reason, "ข้อความต้องเรียกอุปกรณ์ตาม relay.actuator"
+    assert "ไฟ LED" in decision.reason, "ข้อความต้องเรียกอุปกรณ์ตาม relay.actuator"
 
 
 # ---------------------------------------------------------------------------
@@ -277,8 +277,10 @@ def test_ตัวกรองรูปทรงกล่องถูกปิ�
     assert cfg.geometry_filter.enabled is False
 
 
-def test_อุปกรณ์ปลายทางถูกตั้งเป็นเลเซอร์(cfg):
-    assert cfg.relay.actuator == "laser"
+def test_อุปกรณ์ปลายทางถูกตั้งเป็นไฟ_led(cfg):
+    """เปลี่ยนจาก laser เป็น led (2026-09-19) เพราะโมดูลเลเซอร์ไม่ติดที่ 3.3V จากขา GPIO
+    ต้องใช้ 5V ผ่านรีเลย์/ทรานซิสเตอร์ ส่วน LED ต่อตรงได้เลย"""
+    assert cfg.relay.actuator == "led"
 
 
 # ---------------------------------------------------------------------------

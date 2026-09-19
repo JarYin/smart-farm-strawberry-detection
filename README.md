@@ -625,6 +625,43 @@ sudo journalctl -u smartfarm.service -f      # ดู log แบบเรีย�
 
 โปรแกรมจับสัญญาณ `SIGTERM` ไว้แล้ว เมื่อสั่ง `systemctl stop` ปั๊มจะถูกปิดอย่างเรียบร้อยเสมอ
 
+### 7.6 รันโหมดต้นแบบ (prototype-v1) เป็นอีก service แยก
+
+ถ้าต้องการให้เครื่องเดียวสลับได้ทั้งระบบจริงและโหมดสาธิต ให้วางโค้ดของ branch นี้
+ไว้คนละโฟลเดอร์ (เช่น `~/CODE-prototype`) แล้วติดตั้ง service ตัวที่สอง:
+
+```bash
+sudo cp scripts/smartfarm-prototype.service /etc/systemd/system/smartfarm-prototype.service
+sudo systemctl daemon-reload
+sudo systemctl enable smartfarm-prototype.service   # ให้ขึ้นเองตอนบูต
+sudo systemctl start smartfarm-prototype.service
+```
+
+⚠️ **รันได้ทีละตัวเท่านั้น** — ทั้งสอง service ใช้กล้องตัวเดียวกันและขา GPIO17 ร่วมกัน
+ต้องหยุดอีกตัวก่อนเสมอ:
+
+```bash
+sudo systemctl stop smartfarm.service && sudo systemctl start smartfarm-prototype.service
+```
+
+**กับดักที่เคยเจอจริง** (แก้ไว้ใน template แล้ว อย่าแก้กลับ):
+
+| ปัญหา | สาเหตุ | ทางแก้ในไฟล์ |
+|---|---|---|
+| service ไม่รันตอนบูตโดยไม่มี error | `After=graphical.target` คู่กับ `WantedBy=multi-user.target` → ordering cycle → systemd ตัดงานสตาร์ททิ้งเงียบๆ | ใช้ `graphical.target` ทั้งคู่ |
+| `journalctl -f` ไม่เห็น log สด | Python buffer stdout เมื่อไม่ได้ต่อ terminal | `Environment=PYTHONUNBUFFERED=1` |
+| เปิดหน้าต่างไม่ได้ / กล้องยังไม่พร้อมตอน cold boot | เดสก์ท็อปกับกล้อง USB พร้อมช้ากว่า service | `ExecStartPre` หน่วง 20 วิ + รอ `/dev/video0` |
+| ติดตั้ง `opencv-python-headless` แล้วหน้าต่างไม่ขึ้น | แพ็กเกจ headless ไม่มีส่วน GUI | ใช้ `opencv-python` (มี Qt5) แทน |
+
+ตรวจว่าใช้ได้จริงด้วยการรีบูต แล้วดูว่าขึ้นเองไหม:
+
+```bash
+sudo reboot
+# รอ ~40 วินาที แล้วเช็ค
+systemctl is-active smartfarm-prototype.service          # ต้องได้ active
+journalctl -u smartfarm-prototype.service -b | head -3   # ต้องเห็น systemd[1]: Starting...
+```
+
 ---
 
 ## 8. การเก็บผลการทดลอง

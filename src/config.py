@@ -388,7 +388,7 @@ class SprayCfg:
 
 
 # อุปกรณ์ที่รีเลย์ไปต่ออยู่ — มีผลกับ "ข้อความที่แสดง" เท่านั้น ไม่เปลี่ยนตรรกะหรือสัญญาณ GPIO
-ACTUATORS = ("pump", "laser")
+ACTUATORS = ("pump", "laser", "led")
 
 
 @dataclass

@@ -145,20 +145,36 @@ def cfg():
     return load_config(PROJECT_ROOT / "config.yaml")
 
 
-def test_ไฟล์ตั้งค่าจริงขับเลเซอร์ผ่านขา_gpio_ตรง(cfg):
+def test_ไฟล์ตั้งค่าจริงขับอุปกรณ์ผ่านขา_gpio_ตรง(cfg):
     assert cfg.relay.backend == "gpio"
-    assert cfg.relay.actuator == "laser"
+    # ต่อตรงเข้าขา GPIO ได้เฉพาะอุปกรณ์ที่กินไฟอยู่ในพิกัดของขา (~16 mA) และใช้ 3.3V ได้
+    # ปั๊มต้องผ่านรีเลย์เสมอ ส่วนเลเซอร์ KY-008/HW-483 ทดสอบแล้วไม่ติดที่ 3.3V
+    assert cfg.relay.actuator == "led"
 
 
 def test_ไฟล์ตั้งค่าจริงตั้ง_active_high_ถูกด้าน(cfg):
-    """วงจรทรานซิสเตอร์ NPN แบบ low-side: HIGH = ติด
+    """LED ต่อตรง (anode -> ตัวต้านทาน -> GPIO17): HIGH = ติด
 
-    ถ้าใครเผลอแก้กลับเป็น false เลเซอร์จะติดค้างตั้งแต่โปรแกรมเริ่ม
-    และไม่มีทางรู้จนกว่าจะต่อของจริงแล้วมองเห็นจุดแดง — จึงล็อกไว้ที่นี่
+    ถ้าใครเผลอแก้กลับเป็น false ไฟจะติดค้างตั้งแต่โปรแกรมเริ่ม
+    และไม่มีทางรู้จนกว่าจะต่อของจริงแล้วมองเห็น — จึงล็อกไว้ที่นี่
     """
     assert cfg.relay.active_high is True, (
-        "backend gpio + active_high false = เลเซอร์ติดค้างตลอดเวลา"
+        "backend gpio + active_high false = อุปกรณ์ติดค้างตลอดเวลา"
     )
+
+
+def test_actuator_led_มีชุดคำแสดงผลครบ():
+    """เพิ่ม actuator ใหม่ต้องเพิ่มคำทั้ง 3 จุด ไม่งั้นจะ fallback ไปเป็น 'ปั๊ม' เงียบๆ"""
+    from src.overlay import labels_for
+    from src.relay import MOCK_WORDS
+
+    assert "led" in MOCK_WORDS
+    labels = labels_for("led")
+    assert labels.device_th == "ไฟ LED"
+    assert labels.action_th == "เปิดไฟ"
+    assert labels.device == "LED"
+    # ต้องไม่ fallback ไปใช้ชุดคำของปั๊ม
+    assert labels_for("led") is not labels_for("pump")
 
 
 def test_เวลาทำงานสูงสุดยังถูกจำกัดไว้(cfg):

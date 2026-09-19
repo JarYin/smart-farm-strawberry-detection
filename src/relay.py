@@ -99,7 +99,11 @@ class BaseRelay(ABC):
 
 
 # คำที่รีเลย์จำลองใช้พิมพ์ออกคอนโซล ตาม relay.actuator — (คำไทย, คำอังกฤษ)
-MOCK_WORDS = {"pump": ("ปั๊ม", "SPRAY"), "laser": ("เลเซอร์", "LASER")}
+MOCK_WORDS = {
+    "pump": ("ปั๊ม", "SPRAY"),
+    "laser": ("เลเซอร์", "LASER"),
+    "led": ("ไฟ LED", "LED"),
+}
 
 
 class MockRelay(BaseRelay):

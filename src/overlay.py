@@ -70,8 +70,14 @@ LASER_LABELS = ActuatorLabels(
     device="LASER", state="FIRING", verb="FIRE", zone="LASER ZONE",
     device_th="เลเซอร์", action_th="ยิง",
 )
+# LED ต่อตรงเข้าขา GPIO ผ่านตัวต้านทาน — ใช้แทนเลเซอร์ในการสาธิต เพราะกินไฟ ~10 mA
+# อยู่ในพิกัดที่ขา GPIO จ่ายได้ และใช้ 3.3V ได้ ไม่ต้องมีรีเลย์/ทรานซิสเตอร์คั่น
+LED_LABELS = ActuatorLabels(
+    device="LED", state="LED ON", verb="MARK", zone="LED ZONE",
+    device_th="ไฟ LED", action_th="เปิดไฟ",
+)
 
-ACTUATOR_LABELS = {"pump": PUMP_LABELS, "laser": LASER_LABELS}
+ACTUATOR_LABELS = {"pump": PUMP_LABELS, "laser": LASER_LABELS, "led": LED_LABELS}
 
 
 def labels_for(actuator: str) -> ActuatorLabels:

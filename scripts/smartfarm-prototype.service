@@ -1,0 +1,43 @@
+[Unit]
+Description=Smart Farm Prototype-v1 Demo (Color Detection + LED/Laser)
+
+# ⚠️ ต้องเป็น graphical.target ทั้ง After และ WantedBy ให้ตรงกัน — ห้ามแก้เป็น multi-user.target
+# ถ้าใส่ After=graphical.target คู่กับ WantedBy=multi-user.target จะเกิด ordering cycle
+# (graphical.target ถูกจัดให้มาหลัง multi-user.target อยู่แล้ว) แล้ว systemd จะตัดงานสตาร์ท
+# ทิ้งเงียบๆ ด้วยข้อความ "Job deleted to break ordering cycle" ซึ่งไม่โผล่ใน journal ของ
+# service เอง ผลคือ service ไม่รันตอนบูตโดยไม่มี error ให้เห็น — เคยเจอมาแล้วจริง (2026-08-30)
+# โหมดนี้ต้องใช้ graphical.target อยู่แล้วเพราะเปิดหน้าต่างแสดงผลด้วย cv2.imshow
+After=graphical.target
+Wants=graphical.target
+
+# ไม่ยอมแพ้แม้ต้อง restart ถี่ (ตอน cold boot กล้อง USB อาจพร้อมช้ากว่าปกติมาก)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# แก้ User / WorkingDirectory / ExecStart / XDG_RUNTIME_DIR ให้ตรงกับเครื่องจริง
+# (XDG_RUNTIME_DIR ใช้เลข uid ของผู้ใช้ ดูด้วยคำสั่ง id -u)
+User=pi
+WorkingDirectory=/home/pi/CODE-prototype
+
+# PYTHONUNBUFFERED=1 จำเป็น — ถ้าไม่ตั้ง journalctl -f จะไม่เห็น log สดเลย
+# เพราะ Python buffer stdout เต็มก้อนเมื่อไม่ได้ต่อกับ terminal จริง
+Environment=PYTHONUNBUFFERED=1
+# DISPLAY/XDG_RUNTIME_DIR จำเป็นสำหรับเปิดหน้าต่างบนจอที่ต่อกับ Pi
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+# รอให้เดสก์ท็อปขึ้นก่อน ไม่งั้น cv2.imshow เปิดหน้าต่างไม่ได้ (จะ fallback เป็น headless)
+ExecStartPre=/bin/sleep 20
+# รอจน /dev/video0 โผล่จริง (สูงสุด 60 วิ) กัน cold boot ที่กล้อง USB enumerate ช้า
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do [ -e /dev/video0 ] && exit 0; sleep 1; done; echo "ไม่พบ /dev/video0"; exit 1'
+
+# ใส่ --mock-relay ต่อท้ายถ้ายังไม่อยากให้แตะ GPIO จริง (แนะนำตอนยังไม่ได้ต่อวงจร)
+ExecStart=/home/pi/smartfarm-env/bin/python -m src.main
+
+# always ไม่ใช่ on-failure: ให้กู้คืนแม้โปรแกรมจบแบบ exit 0 (เช่นกล้องหลุดกลางทาง)
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=graphical.target
